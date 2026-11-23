@@ -8,11 +8,12 @@
 
 Khi bạn kéo dự án về máy Mac để build cho iPhone / iPad:
 
-### Bước 1: Tạo thư mục nền tảng `ios/` trên máy Mac
+### Bước 1: Tạo thư mục nền tảng `ios/` và tự động áp dụng Logo App trên máy Mac
 Mở Terminal tại thư mục dự án trên máy Mac và chạy:
 ```bash
 flutter pub get
 flutter create --platforms=ios --org com.chibi.flashcard --project-name chibi_flashcard .
+dart run flutter_launcher_icons
 ```
 
 ### Bước 2: Thêm quyền Micro & Nhận diện giọng nói vào `ios/Runner/Info.plist`
