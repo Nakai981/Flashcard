@@ -27,6 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<FlashcardItem> _flashcards = [];
   bool _isLoading = true;
   bool _sortNewestFirst = true;
+  int _syncRefreshVersion = 0;
 
   @override
   void initState() {
@@ -176,7 +177,7 @@ class _HomeScreenState extends State<HomeScreen> {
               index: _selectedTabIndex,
               children: [
                 _buildFlashcardListTab(canReview),
-                const NotesScreen(),
+                NotesScreen(key: ValueKey('notes_$_syncRefreshVersion')),
                 ReviewScreen(
                   allFlashcards: _flashcards,
                   onFlashcardsUpdated: (updated) {
@@ -186,10 +187,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                 ),
                 TopicVocabScreen(
+                  key: ValueKey('topic_$_syncRefreshVersion'),
                   userFlashcards: _flashcards,
                   onAddWordToFlashcards: _handleAddFlashcard,
                 ),
-                const SettingsScreen(),
+                SettingsScreen(
+                  onDataSynced: () async {
+                    final loaded = await StorageService.loadFlashcards();
+                    if (!mounted) return;
+                    setState(() {
+                      _flashcards = loaded;
+                      _syncRefreshVersion++;
+                    });
+                  },
+                ),
               ],
             ),
       floatingActionButton: _selectedTabIndex == 0

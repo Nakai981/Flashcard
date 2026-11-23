@@ -24,6 +24,13 @@ Mở file `ios/Runner/Info.plist` và thêm các khóa sau vào bên trong thẻ
 	<string>Ứng dụng cần quyền Micro để thu âm và kiểm tra phát âm từ vựng tiếng Anh của bạn.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Ứng dụng cần quyền Nhận diện giọng nói để đối chiếu phát âm tiếng Anh của bạn.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Ứng dụng cần quyền Mạng cục bộ (LAN) để đồng bộ Flashcard, Ghi chú và tiến độ Ôn tập giữa 2 điện thoại cùng Wi-Fi.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
