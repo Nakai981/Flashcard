@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/audio_speech_service.dart';
+import '../services/daily_reminder_widget_service.dart';
 import '../services/lan_sync_service.dart';
 import '../theme/chibi_theme.dart';
 
@@ -19,6 +20,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _selectedVoiceId = AudioSpeechService.currentVoiceId;
   double _speechRate = AudioSpeechService.currentSpeechRate;
   bool _isLoading = true;
+
+  // Trạng thái Nhắc ôn tập qua ngày & Tiện ích màn hình khóa
+  bool _dailyReminderEnabled = DailyReminderWidgetService.dailyReminderEnabled;
+  int _reminderHour = DailyReminderWidgetService.reminderHour;
+  int _reminderMinute = DailyReminderWidgetService.reminderMinute;
+  bool _lockScreenWidgetEnabled =
+      DailyReminderWidgetService.lockScreenWidgetEnabled;
 
   // Trạng thái Đồng bộ mạng LAN giữa 2 điện thoại
   bool _isLanServerRunning = LanSyncService.isServerRunning;
@@ -61,12 +69,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _initSettings() async {
     await AudioSpeechService.loadVoiceSettings();
+    await DailyReminderWidgetService.loadSettings();
     await LanSyncService.loadSavedSyncConfig();
     final ip = await LanSyncService.getLocalLanIp();
     if (!mounted) return;
     setState(() {
       _selectedVoiceId = AudioSpeechService.currentVoiceId;
       _speechRate = AudioSpeechService.currentSpeechRate;
+      _dailyReminderEnabled = DailyReminderWidgetService.dailyReminderEnabled;
+      _reminderHour = DailyReminderWidgetService.reminderHour;
+      _reminderMinute = DailyReminderWidgetService.reminderMinute;
+      _lockScreenWidgetEnabled =
+          DailyReminderWidgetService.lockScreenWidgetEnabled;
       _myLanIp = ip;
       _isLanServerRunning = LanSyncService.isServerRunning;
       _autoSyncEnabled = LanSyncService.autoSyncEnabled;
@@ -78,6 +92,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       _isLoading = false;
     });
+  }
+
+  Future<void> _pickReminderTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: _reminderHour, minute: _reminderMinute),
+    );
+    if (picked != null) {
+      await DailyReminderWidgetService.setDailyReminderTime(
+        picked.hour,
+        picked.minute,
+      );
+      if (!mounted) return;
+      setState(() {
+        _reminderHour = picked.hour;
+        _reminderMinute = picked.minute;
+      });
+    }
   }
 
   Future<void> _toggleAutoSync(bool value) async {
@@ -236,7 +268,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 1. Khung Đồng Bộ Dữ Liệu Qua Mạng LAN Giữa 2 Điện Thoại (Có lưu thiết bị & tự động đồng bộ khi mở app)
+          // 1. Khung Nhắc ôn tập từ mới qua ngày & Tiện ích màn hình khóa
+          _buildDailyReminderAndWidgetSection(),
+          const SizedBox(height: 18),
+
+          // 2. Khung Đồng Bộ Dữ Liệu Qua Mạng LAN Giữa 2 Điện Thoại (Có lưu thiết bị & tự động đồng bộ khi mở app)
           _buildLanSyncSection(),
           const SizedBox(height: 18),
 
@@ -375,6 +411,215 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDailyReminderAndWidgetSection() {
+    final timeStr =
+        '${_reminderHour.toString().padLeft(2, '0')}:${_reminderMinute.toString().padLeft(2, '0')}';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: ChibiTheme.kawaiiCardDecoration(
+        color: Colors.white,
+        borderColor: ChibiTheme.softPink,
+        radius: 26,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: ChibiTheme.softPink,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.notifications_active_rounded,
+                  color: ChibiTheme.deepPink,
+                  size: 25,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Nhắc Ôn Tập & Tiện Ích Màn Hình Khóa ⏰',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: ChibiTheme.textDark,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Nhắc ôn tập từ mới khi qua ngày và ghim từ mới trong ngày lên màn hình khóa',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: ChibiTheme.textMuted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // 1. Nhắc ôn tập từ mới khi qua ngày
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: ChibiTheme.bgCream,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: ChibiTheme.softPink),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.alarm_rounded,
+                        color: ChibiTheme.deepPink, size: 22),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Nhắc ôn tập từ mới qua ngày',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w900,
+                              color: ChibiTheme.textDark,
+                            ),
+                          ),
+                          Text(
+                            'Thông báo nhắc học từ mới mỗi ngày',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: ChibiTheme.textMuted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: _dailyReminderEnabled,
+                      activeTrackColor: ChibiTheme.deepPink,
+                      onChanged: (val) async {
+                        await DailyReminderWidgetService
+                            .setDailyReminderEnabled(val);
+                        if (!mounted) return;
+                        setState(() {
+                          _dailyReminderEnabled = val;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                if (_dailyReminderEnabled) ...[
+                  const Divider(height: 12, color: ChibiTheme.softPink),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Giờ nhắc hàng ngày:',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: ChibiTheme.textDark,
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: _pickReminderTime,
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: ChibiTheme.deepPink,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        icon: const Icon(Icons.access_time_filled_rounded,
+                            size: 16),
+                        label: Text(
+                          timeStr,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // 2. Tiện ích hiển thị từ mới trên màn hình khóa
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF3FF),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: ChibiTheme.softPink),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.lock_clock_rounded,
+                    color: ChibiTheme.deepPink, size: 22),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tiện ích từ mới trên Màn hình khóa',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w900,
+                          color: ChibiTheme.textDark,
+                        ),
+                      ),
+                      Text(
+                        'Hiển thị từ mới của Flashcard trong ngày ở màn hình khóa & Widget',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: ChibiTheme.textMuted,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _lockScreenWidgetEnabled,
+                  activeTrackColor: ChibiTheme.deepPink,
+                  onChanged: (val) async {
+                    await DailyReminderWidgetService.setLockScreenWidgetEnabled(
+                        val);
+                    if (!mounted) return;
+                    setState(() {
+                      _lockScreenWidgetEnabled = val;
+                    });
+                  },
                 ),
               ],
             ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/flashcard_model.dart';
 import '../services/audio_speech_service.dart';
+import '../services/daily_reminder_widget_service.dart';
 import '../services/lan_sync_service.dart';
 import '../services/storage_service.dart';
 import '../theme/chibi_theme.dart';
@@ -46,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _reloadAfterLanSync() async {
     final loaded = await StorageService.loadFlashcards();
+    await DailyReminderWidgetService.updateDailyWordWidgetAndLockScreen(loaded);
     if (!mounted) return;
     setState(() {
       _flashcards = loaded;
@@ -85,10 +87,43 @@ class _HomeScreenState extends State<HomeScreen> {
       _flashcards = loaded;
       _isLoading = false;
     });
+
+    final newDayPendingCount =
+        await DailyReminderWidgetService.checkNewDayAndSyncWidget(loaded);
+    if (!mounted) return;
+    if (newDayPendingCount > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: ChibiTheme.deepPink,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          action: SnackBarAction(
+            label: 'Ôn ngay',
+            textColor: Colors.white,
+            onPressed: () {
+              if (mounted) {
+                setState(() {
+                  _selectedTabIndex = 2; // Tab Ôn tập
+                });
+              }
+            },
+          ),
+          content: Text(
+            '🌅 Đã qua ngày mới! Bạn có $newDayPendingCount từ mới chờ ôn tập hôm nay.',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _handleAddFlashcard(FlashcardItem newCard) async {
     final updated = await StorageService.addFlashcard(newCard);
+    await DailyReminderWidgetService.updateDailyWordWidgetAndLockScreen(updated);
+    await DailyReminderWidgetService.scheduleDailyReviewReminder(updated);
     if (!mounted) return;
     setState(() {
       _flashcards = updated;
@@ -154,6 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirm == true) {
       final updated = await StorageService.deleteFlashcard(item.id);
+      await DailyReminderWidgetService.updateDailyWordWidgetAndLockScreen(updated);
+      await DailyReminderWidgetService.scheduleDailyReviewReminder(updated);
       if (!mounted) return;
       setState(() {
         _flashcards = updated;
@@ -226,6 +263,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     setState(() {
                       _flashcards = updated;
                     });
+                    DailyReminderWidgetService
+                        .updateDailyWordWidgetAndLockScreen(updated);
+                    DailyReminderWidgetService.scheduleDailyReviewReminder(
+                        updated);
                   },
                 ),
                 TopicVocabScreen(
