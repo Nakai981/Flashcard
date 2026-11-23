@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum VoiceGender {
@@ -16,8 +18,6 @@ class EnglishVoiceOption {
   final String subtitle;
   final String localeCode; // 'en-US' (Tiếng Mỹ) hoặc 'en-GB' (Tiếng Anh)
   final VoiceGender gender;
-  final bool preferGoogleOnlineForFemale;
-  final double pitch;
 
   const EnglishVoiceOption({
     required this.id,
@@ -25,8 +25,6 @@ class EnglishVoiceOption {
     required this.subtitle,
     required this.localeCode,
     required this.gender,
-    this.preferGoogleOnlineForFemale = false,
-    this.pitch = 1.0,
   });
 }
 
@@ -37,175 +35,52 @@ class AudioSpeechService {
   static const String _prefVoiceIdKey = 'chibi_english_voice_id_v2';
   static const String _prefSpeechRateKey = 'chibi_english_speech_rate';
 
-  /// 4 lựa chọn giọng đọc chuẩn: Giọng Nữ & Giọng Nam cho Tiếng Mỹ (en-US) và Tiếng Anh (en-GB)
+  /// 4 lựa chọn giọng đọc tự nhiên: Giọng Nữ & Giọng Nam cho Tiếng Mỹ (en-US) và Tiếng Anh (en-GB)
   static const List<EnglishVoiceOption> voiceOptions = [
     EnglishVoiceOption(
       id: 'us_female',
       name: 'Giọng Nữ • Tiếng Mỹ (US)',
-      subtitle: 'Phát âm chuẩn giọng Nữ Anh - Mỹ (Mặc định)',
+      subtitle: 'Giọng đọc Từ điển Quốc tế & Google Neural tự nhiên (Mặc định)',
       localeCode: 'en-US',
       gender: VoiceGender.female,
-      preferGoogleOnlineForFemale: true,
-      pitch: 1.15,
     ),
     EnglishVoiceOption(
       id: 'us_male',
       name: 'Giọng Nam • Tiếng Mỹ (US)',
-      subtitle: 'Phát âm chuẩn giọng Nam trầm Anh - Mỹ',
+      subtitle: 'Giọng Nam chuẩn Anh - Mỹ tự nhiên, rõ chữ',
       localeCode: 'en-US',
       gender: VoiceGender.male,
-      preferGoogleOnlineForFemale: false,
-      pitch: 0.78,
     ),
     EnglishVoiceOption(
       id: 'uk_female',
       name: 'Giọng Nữ • Tiếng Anh (UK)',
-      subtitle: 'Phát âm chuẩn giọng Nữ Hoàng gia Anh - Anh',
+      subtitle: 'Giọng đọc Từ điển Anh - Anh (British) tự nhiên',
       localeCode: 'en-GB',
       gender: VoiceGender.female,
-      preferGoogleOnlineForFemale: true,
-      pitch: 1.15,
     ),
     EnglishVoiceOption(
       id: 'uk_male',
       name: 'Giọng Nam • Tiếng Anh (UK)',
-      subtitle: 'Phát âm chuẩn giọng Nam trầm Hoàng gia Anh - Anh',
+      subtitle: 'Giọng Nam chuẩn Hoàng gia Anh (British) tự nhiên',
       localeCode: 'en-GB',
       gender: VoiceGender.male,
-      preferGoogleOnlineForFemale: false,
-      pitch: 0.78,
     ),
   ];
 
   static String _currentVoiceId = 'us_female';
   static double _speechRate = 1.0; // 1.0 = Bình thường, 0.7 = Chậm
   static bool _prefsLoaded = false;
-  static bool _iosAudioConfigured = false;
+  static bool _isSpeaking = false;
   static List<Map<String, String>>? _availableDeviceVoices;
 
   static Future<void> loadVoiceSettings() async {
     if (_prefsLoaded) return;
-    final prefs = await SharedPreferences.getInstance();
-    _currentVoiceId = prefs.getString(_prefVoiceIdKey) ?? 'us_female';
-    _speechRate = prefs.getDouble(_prefSpeechRateKey) ?? 1.0;
-    _prefsLoaded = true;
-  }
-
-  /// Cấu hình AVAudioSession trên iOS để vừa phát âm thanh qua loa ngoài
-  /// vừa không xung đột với Micro thu âm.
-  static Future<void> _configureIosAudioIfNeeded() async {
-    if (_iosAudioConfigured) return;
-    _iosAudioConfigured = true;
     try {
-      if (Platform.isIOS) {
-        await _flutterTts.setSharedInstance(true);
-        await _flutterTts.setIosAudioCategory(
-          IosTextToSpeechAudioCategory.playAndRecord,
-          [
-            IosTextToSpeechAudioCategoryOptions.allowBluetooth,
-            IosTextToSpeechAudioCategoryOptions.allowBluetoothA2DP,
-            IosTextToSpeechAudioCategoryOptions.mixWithOthers,
-            IosTextToSpeechAudioCategoryOptions.defaultToSpeaker,
-          ],
-          IosTextToSpeechAudioMode.defaultMode,
-        );
-      }
+      final prefs = await SharedPreferences.getInstance();
+      _currentVoiceId = prefs.getString(_prefVoiceIdKey) ?? 'us_female';
+      _speechRate = prefs.getDouble(_prefSpeechRateKey) ?? 1.0;
+      _prefsLoaded = true;
     } catch (_) {}
-  }
-
-  /// Tìm giọng Nam / Nữ thực tế có sẵn trên thiết bị Android hoặc iOS
-  static Future<Map<String, String>?> _findMatchingDeviceVoice({
-    required String localeCode,
-    required VoiceGender gender,
-  }) async {
-    try {
-      if (_availableDeviceVoices == null) {
-        final rawVoices = await _flutterTts.getVoices;
-        if (rawVoices is List) {
-          _availableDeviceVoices = rawVoices
-              .whereType<Map>()
-              .map((m) => m.map(
-                  (k, v) => MapEntry(k.toString(), v?.toString() ?? '')))
-              .toList();
-        } else {
-          _availableDeviceVoices = [];
-        }
-      }
-
-      final targetPrefix = localeCode.toLowerCase().replaceAll('_', '-');
-      final candidates = _availableDeviceVoices!.where((v) {
-        final loc = (v['locale'] ?? '').toLowerCase().replaceAll('_', '-');
-        return loc == targetPrefix || loc.startsWith(targetPrefix.split('-').first);
-      }).toList();
-
-      // Các từ khóa nhận diện giọng Nam / Nữ trên iOS (Daniel, Arthur, Aaron, Samantha, Karen, Martha...)
-      // và trên Android Google TTS (en-us-x-iom, iog, sfg, tpd, en-gb-x-rjs, gbd, gba...)
-      const maleIndicators = [
-        'male',
-        '#male',
-        'daniel',
-        'arthur',
-        'aaron',
-        'fred',
-        'gordon',
-        'oliver',
-        'rishi',
-        'iom',
-        'tpd',
-        'rjs',
-        'gbd',
-        'gba',
-        'men',
-      ];
-      const femaleIndicators = [
-        'female',
-        '#female',
-        'samantha',
-        'victoria',
-        'karen',
-        'martha',
-        'SERENA',
-        'serena',
-        'moira',
-        'tessa',
-        'sfg',
-        'iog',
-        'gbg',
-        'gbc',
-        'women',
-      ];
-
-      final exactLocaleCandidates = candidates.where((v) {
-        final loc = (v['locale'] ?? '').toLowerCase().replaceAll('_', '-');
-        return loc == targetPrefix;
-      }).toList();
-
-      final pool =
-          exactLocaleCandidates.isNotEmpty ? exactLocaleCandidates : candidates;
-
-      for (final v in pool) {
-        final combined =
-            '${v['name'] ?? ''} ${v['gender'] ?? ''} ${v['identifier'] ?? ''}'
-                .toLowerCase();
-        if (gender == VoiceGender.male) {
-          if (maleIndicators.any((k) => combined.contains(k)) &&
-              !combined.contains('female')) {
-            return {
-              'name': v['name'] ?? '',
-              'locale': v['locale'] ?? localeCode,
-            };
-          }
-        } else {
-          if (femaleIndicators.any((k) => combined.contains(k))) {
-            return {
-              'name': v['name'] ?? '',
-              'locale': v['locale'] ?? localeCode,
-            };
-          }
-        }
-      }
-    } catch (_) {}
-    return null;
   }
 
   static String get currentVoiceId => _currentVoiceId;
@@ -230,66 +105,301 @@ class AudioSpeechService {
     await prefs.setDouble(_prefSpeechRateKey, rate);
   }
 
-  /// Phát âm từ tiếng Anh theo giọng Nữ / Nam của Tiếng Anh (UK) hoặc Tiếng Mỹ (US)
-  static Future<void> speakEnglishWord(String word) async {
-    final clean = word.trim();
-    if (clean.isEmpty) return;
+  /// Tìm giọng đọc Neural/Enhanced tự nhiên nhất trên thiết bị (tránh các giọng compact robot cũ)
+  /// và KHÔNG biến dạng pitch quá mức khiến giọng bị méo như robot.
+  static Future<Map<String, String>?> _findBestNaturalDeviceVoice({
+    required String localeCode,
+    required VoiceGender gender,
+  }) async {
+    try {
+      if (_availableDeviceVoices == null) {
+        final rawVoices = await _flutterTts.getVoices;
+        if (rawVoices is List) {
+          _availableDeviceVoices = rawVoices
+              .whereType<Map>()
+              .map((m) => m.map(
+                  (k, v) => MapEntry(k.toString(), v?.toString() ?? '')))
+              .toList();
+        } else {
+          _availableDeviceVoices = [];
+        }
+      }
 
-    await loadVoiceSettings();
-    await _configureIosAudioIfNeeded();
-    final option = currentVoiceOption;
+      if (_availableDeviceVoices == null || _availableDeviceVoices!.isEmpty) {
+        return null;
+      }
 
-    // 1. Nếu là giọng Nữ (US hoặc UK), ưu tiên giọng Nữ chuẩn của Google Dịch Online trước
-    if (option.preferGoogleOnlineForFemale) {
+      final targetPrefix = localeCode.toLowerCase().replaceAll('_', '-');
+      final candidates = _availableDeviceVoices!.where((v) {
+        final loc = (v['locale'] ?? '').toLowerCase().replaceAll('_', '-');
+        return loc == targetPrefix ||
+            loc.startsWith(targetPrefix.split('-').first);
+      }).toList();
+
+      const maleIndicators = [
+        'male',
+        '#male',
+        'daniel',
+        'arthur',
+        'aaron',
+        'Alex',
+        'alex',
+        'oliver',
+        'tom',
+        'evan',
+        'nathan',
+        'iom',
+        'tpd',
+        'rjs',
+        'gbd',
+        'gba',
+      ];
+      const femaleIndicators = [
+        'female',
+        '#female',
+        'samantha',
+        'ava',
+        'allison',
+        'susan',
+        'victoria',
+        'karen',
+        'martha',
+        'serena',
+        'moira',
+        'tessa',
+        'sfg',
+        'iog',
+        'gbg',
+        'gbc',
+      ];
+
+      final exactLocaleCandidates = candidates.where((v) {
+        final loc = (v['locale'] ?? '').toLowerCase().replaceAll('_', '-');
+        return loc == targetPrefix;
+      }).toList();
+
+      final pool =
+          exactLocaleCandidates.isNotEmpty ? exactLocaleCandidates : candidates;
+
+      // Sắp xếp ưu tiên các giọng Enhanced / Premium / Network (tự nhiên hơn giọng compact)
+      pool.sort((a, b) {
+        final aStr = a.values.join(' ').toLowerCase();
+        final bStr = b.values.join(' ').toLowerCase();
+        final aScore = (aStr.contains('enhanced') ||
+                aStr.contains('premium') ||
+                aStr.contains('network') ||
+                aStr.contains('siri'))
+            ? 1
+            : 0;
+        final bScore = (bStr.contains('enhanced') ||
+                bStr.contains('premium') ||
+                bStr.contains('network') ||
+                bStr.contains('siri'))
+            ? 1
+            : 0;
+        return bScore.compareTo(aScore);
+      });
+
+      for (final v in pool) {
+        final combined =
+            '${v['name'] ?? ''} ${v['gender'] ?? ''} ${v['identifier'] ?? ''}'
+                .toLowerCase();
+        if (gender == VoiceGender.male) {
+          if (maleIndicators.any((k) => combined.contains(k.toLowerCase())) &&
+              !combined.contains('female')) {
+            return {
+              'name': v['name'] ?? '',
+              'locale': v['locale'] ?? localeCode,
+            };
+          }
+        } else {
+          if (femaleIndicators.any((k) => combined.contains(k.toLowerCase()))) {
+            return {
+              'name': v['name'] ?? '',
+              'locale': v['locale'] ?? localeCode,
+            };
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Tải file MP3 giọng đọc người thật (Human Dictionary Audio) hoặc Google Neural TTS
+  /// và lưu vào file tạm `.mp3` trong thư mục cache trước khi phát bằng `DeviceFileSource`.
+  /// -> Khắc phục hoàn toàn lỗi crash `AVPlayer` trên iOS khi dùng `BytesSource`!
+  static Future<bool> _tryPlayOnlineNaturalAudio(
+    String cleanWord,
+    EnglishVoiceOption option,
+  ) async {
+    final encoded = Uri.encodeComponent(cleanWord);
+    final isUk = option.localeCode == 'en-GB';
+    final isFemale = option.gender == VoiceGender.female;
+
+    final List<String> candidateUrls = [];
+
+    if (isFemale) {
+      // Giọng Nữ:
+      // 1. Giọng người thật từ Từ điển Quốc tế (Youdao/Collins Dictionary Voice: type=2 là Mỹ, type=1 là Anh)
+      final dictType = isUk ? 1 : 2;
+      candidateUrls.add(
+        'https://dict.youdao.com/dictvoice?audio=$encoded&type=$dictType',
+      );
+      // 2. Google Translate Neural Voice (client=tw-ob & client=at)
+      final ttsspeed = _speechRate < 0.85 ? '0.4' : '1';
+      candidateUrls.add(
+        'https://translate.google.com/translate_tts?ie=UTF-8&client=at&tl=${option.localeCode}&ttsspeed=$ttsspeed&q=$encoded',
+      );
+    } else {
+      // Giọng Nam:
+      // 1. Tìm file MP3 giọng người thật chuẩn từ Free Dictionary API (Wikimedia / Oxford human audio)
       try {
-        await _audioPlayer.stop();
-        await _flutterTts.stop();
-        final encoded = Uri.encodeComponent(clean);
-        final ttsspeed = _speechRate < 0.85 ? '0.3' : '1';
-        final url =
-            'https://translate.google.com/translate_tts?ie=UTF-8&client=at&tl=${option.localeCode}&ttsspeed=$ttsspeed&q=$encoded';
+        final dictApiUrl = Uri.parse(
+            'https://api.dictionaryapi.dev/api/v2/entries/en/$encoded');
+        final dictResp = await http
+            .get(dictApiUrl)
+            .timeout(const Duration(milliseconds: 2500));
+        if (dictResp.statusCode == 200) {
+          final decoded = jsonDecode(dictResp.body);
+          if (decoded is List && decoded.isNotEmpty) {
+            final phonetics = decoded.first['phonetics'];
+            if (phonetics is List) {
+              String? fallbackAudio;
+              final targetSuffix = isUk ? '-uk.mp3' : '-us.mp3';
+              for (final ph in phonetics) {
+                final audioUrl = ph['audio']?.toString() ?? '';
+                if (audioUrl.isNotEmpty) {
+                  fallbackAudio ??= audioUrl;
+                  if (audioUrl.toLowerCase().endsWith(targetSuffix)) {
+                    candidateUrls.add(audioUrl);
+                    break;
+                  }
+                }
+              }
+              if (candidateUrls.isEmpty && fallbackAudio != null) {
+                candidateUrls.add(fallbackAudio);
+              }
+            }
+          }
+        }
+      } catch (_) {}
 
+      // 2. Từ điển Youdao/Collins Human Audio (type=1 Anh-Anh, type=2 Anh-Mỹ)
+      // Nếu thiết bị không có giọng Nam Neural cao cấp, ưu tiên phát giọng người thật từ từ điển thay vì giọng TTS robot
+      final dictType = isUk ? 1 : 2;
+      candidateUrls.add(
+        'https://dict.youdao.com/dictvoice?audio=$encoded&type=$dictType',
+      );
+    }
+
+    for (final url in candidateUrls) {
+      try {
         final resp = await http.get(
           Uri.parse(url),
           headers: const {
             'User-Agent':
-                'AndroidTranslate/5.3.0.RC02.130475354-53000263 5.1 phone TRANSLATE_OPM5_TEST_1',
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
           },
-        ).timeout(const Duration(seconds: 6));
+        ).timeout(const Duration(seconds: 5));
 
-        if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
+        if (resp.statusCode == 200 && resp.bodyBytes.length > 500) {
+          final tempDir = await getTemporaryDirectory();
+          final safeWord =
+              cleanWord.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
+          final tempFile = File(
+            p.join(
+                tempDir.path, 'tts_${option.id}_$safeWord.mp3'),
+          );
+          await tempFile.writeAsBytes(resp.bodyBytes, flush: true);
+
+          await _audioPlayer.stop();
           await _audioPlayer.setPlaybackRate(_speechRate);
-          await _audioPlayer
-              .play(BytesSource(Uint8List.fromList(resp.bodyBytes)));
+          await _audioPlayer.play(DeviceFileSource(tempFile.path));
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    return false;
+  }
+
+  /// Phát âm từ tiếng Anh:
+  /// - An toàn tuyệt đối trên iOS (không gọi đồng thời AVPlayer + AVSpeechSynthesizer gây crash)
+  /// - Ưu tiên giọng đọc người thật từ Từ điển & Google Neural chuẩn, tự nhiên, không bị méo giọng robot.
+  static Future<void> speakEnglishWord(String word) async {
+    final clean = word.trim();
+    if (clean.isEmpty) return;
+
+    // Ngăn gọi chồng chéo liên tiếp làm crash AudioSession trên iOS
+    if (_isSpeaking) {
+      try {
+        await _audioPlayer.stop();
+        await _flutterTts.stop();
+      } catch (_) {}
+    }
+    _isSpeaking = true;
+
+    try {
+      await loadVoiceSettings();
+      final option = currentVoiceOption;
+
+      // Nếu người dùng chọn Giọng Nam và thiết bị (đặc biệt là iOS với giọng Daniel/Arthur/Aaron)
+      // có sẵn giọng Nam bản xứ chất lượng cao -> Dùng giọng Nam tự nhiên với pitch chuẩn (1.0)
+      if (option.gender == VoiceGender.male) {
+        final matchedMaleVoice = await _findBestNaturalDeviceVoice(
+          localeCode: option.localeCode,
+          gender: VoiceGender.male,
+        );
+        if (matchedMaleVoice != null &&
+            (matchedMaleVoice['name']?.isNotEmpty ?? false)) {
+          await _audioPlayer.stop();
+          await _flutterTts.stop();
+          await _flutterTts.setLanguage(option.localeCode);
+          await _flutterTts.setVoice(matchedMaleVoice);
+          // Giữ pitch = 1.0 tự nhiên để không bị tiếng trầm robot
+          await _flutterTts.setPitch(1.0);
+          final ttsRate = Platform.isIOS
+              ? (_speechRate * 0.5).clamp(0.3, 0.65)
+              : (_speechRate * 0.48).clamp(0.28, 0.75);
+          await _flutterTts.setSpeechRate(ttsRate);
+          await _flutterTts.speak(clean);
           return;
         }
-      } catch (_) {
-        // Nếu mất mạng thì tự động chuyển xuống giọng Nữ TTS trên thiết bị
       }
-    }
 
-    // 2. Phát bằng giọng Nam hoặc Nữ TTS trên thiết bị (chọn đúng Voice Nam/Nữ của en-US hoặc en-GB + chỉnh Pitch)
-    await _audioPlayer.stop();
-    await _flutterTts.stop();
-    await _flutterTts.setLanguage(option.localeCode);
+      // Ưu tiên phát file MP3 giọng đọc người thật (Từ điển Quốc tế / Google Neural) qua file tạm an toàn trên cả iOS & Android
+      final playedOnline = await _tryPlayOnlineNaturalAudio(clean, option);
+      if (playedOnline) {
+        return;
+      }
 
-    final matchedVoice = await _findMatchingDeviceVoice(
-      localeCode: option.localeCode,
-      gender: option.gender,
-    );
-    if (matchedVoice != null && (matchedVoice['name']?.isNotEmpty ?? false)) {
-      await _flutterTts.setVoice(matchedVoice);
-      // Nếu đã tìm thấy đúng voice Nam/Nữ gốc của hệ điều hành thì giữ pitch tự nhiên gần 1.0
+      // Dự phòng Offline TTS trên máy với pitch tự nhiên (1.0) để không bị giọng robot
+      await _audioPlayer.stop();
+      await _flutterTts.stop();
+      await _flutterTts.setLanguage(option.localeCode);
+
+      final matchedVoice = await _findBestNaturalDeviceVoice(
+        localeCode: option.localeCode,
+        gender: option.gender,
+      );
+      if (matchedVoice != null &&
+          (matchedVoice['name']?.isNotEmpty ?? false)) {
+        await _flutterTts.setVoice(matchedVoice);
+      }
+
+      // Giữ pitch chuẩn tự nhiên (0.95 cho Nam, 1.03 cho Nữ) thay vì ép pitch quá sâu gây tiếng robot
       await _flutterTts
-          .setPitch(option.gender == VoiceGender.male ? 0.92 : 1.05);
-    } else {
-      // Nếu máy chỉ có 1 voice mặc định cho ngôn ngữ đó, điều chỉnh pitch để tạo giọng Nam trầm (0.78) hoặc Nữ cao (1.15)
-      await _flutterTts.setPitch(option.pitch);
+          .setPitch(option.gender == VoiceGender.male ? 0.95 : 1.03);
+      final ttsRate = Platform.isIOS
+          ? (_speechRate * 0.5).clamp(0.3, 0.65)
+          : (_speechRate * 0.48).clamp(0.28, 0.75);
+      await _flutterTts.setSpeechRate(ttsRate);
+      await _flutterTts.speak(clean);
+    } catch (_) {
+      // Bắt mọi ngoại lệ âm thanh để không bao giờ gây crash app trên iOS
+    } finally {
+      _isSpeaking = false;
     }
-
-    final ttsRate = (_speechRate * 0.48).clamp(0.25, 0.85);
-    await _flutterTts.setSpeechRate(ttsRate);
-    await _flutterTts.speak(clean);
   }
 
   static Future<void> stop() async {

@@ -1181,39 +1181,41 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 ],
 
                 const SizedBox(height: 20),
-                TextField(
-                  controller: _answerController,
-                  enabled: !_hasCheckedCurrent,
-                  textInputAction: TextInputAction.done,
-                  onSubmitted: (_) => _handleCheckAnswer(),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'Gõ từ tiếng Anh vào đây...',
-                    filled: true,
-                    fillColor: ChibiTheme.bgCream,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 16),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: const BorderSide(
-                          color: ChibiTheme.softPink, width: 2),
+                    TextField(
+                      controller: _answerController,
+                      enabled: !_hasCheckedCurrent,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _handleCheckAnswer(),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Gõ từ tiếng Anh vào đây...',
+                        filled: true,
+                        fillColor: ChibiTheme.bgCream,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 16),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: const BorderSide(
+                              color: ChibiTheme.softPink, width: 2),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: const BorderSide(
+                              color: ChibiTheme.softPink, width: 2),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: const BorderSide(
+                              color: ChibiTheme.deepPink, width: 2.5),
+                        ),
+                      ),
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: const BorderSide(
-                          color: ChibiTheme.softPink, width: 2),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: const BorderSide(
-                          color: ChibiTheme.deepPink, width: 2.5),
-                    ),
-                  ),
-                ),
 
                 if (_hasCheckedCurrent) ...[
                   const SizedBox(height: 16),
