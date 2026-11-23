@@ -5,6 +5,7 @@ import '../services/storage_service.dart';
 import '../theme/chibi_theme.dart';
 import 'add_flashcard_sheet.dart';
 import 'flashcard_study_screen.dart';
+import 'notes_screen.dart';
 import 'review_screen.dart';
 import 'settings_screen.dart';
 import 'topic_vocab_screen.dart';
@@ -122,10 +123,12 @@ class _HomeScreenState extends State<HomeScreen> {
       case 0:
         return 'Chibi Flashcard Tiếng Anh';
       case 1:
-        return 'Ôn Tập Từ Vựng';
+        return 'Ghi Chú & Khái Niệm';
       case 2:
-        return 'Topic Từ Vựng';
+        return 'Ôn Tập Từ Vựng';
       case 3:
+        return 'Topic Từ Vựng';
+      case 4:
         return 'Cài Đặt';
       default:
         return 'Chibi Flashcard Tiếng Anh';
@@ -173,6 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
               index: _selectedTabIndex,
               children: [
                 _buildFlashcardListTab(canReview),
+                const NotesScreen(),
                 ReviewScreen(
                   allFlashcards: _flashcards,
                   onFlashcardsUpdated: (updated) {
@@ -229,6 +233,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: ChibiTheme.deepPink,
               ),
               label: 'Flashcard',
+            ),
+            const NavigationDestination(
+              icon: Icon(Icons.edit_note_outlined),
+              selectedIcon: Icon(
+                Icons.edit_note_rounded,
+                color: ChibiTheme.deepPink,
+              ),
+              label: 'Ghi chú',
             ),
             NavigationDestination(
               icon: Badge(
@@ -387,7 +399,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: OutlinedButton.icon(
                     onPressed: () {
                       setState(() {
-                        _selectedTabIndex = 1;
+                        _selectedTabIndex = 2;
                       });
                     },
                     style: OutlinedButton.styleFrom(
@@ -645,7 +657,7 @@ class _HomeScreenState extends State<HomeScreen> {
               OutlinedButton.icon(
                 onPressed: () {
                   setState(() {
-                    _selectedTabIndex = 2;
+                    _selectedTabIndex = 3;
                   });
                 },
                 style: OutlinedButton.styleFrom(
