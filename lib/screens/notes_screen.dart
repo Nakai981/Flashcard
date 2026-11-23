@@ -1,32 +1,338 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/note_model.dart';
 import '../services/note_storage_service.dart';
 import '../theme/chibi_theme.dart';
 
-/// Bộ phân tích cú pháp Highlight màu sắc:
-/// - `[r]...[/r]` -> Màu Đỏ nổi bật (#C92A2A) giống "Chủ ngữ", "chia động từ", "hành động", "trạng thái", "bổ trợ"
-/// - `[g]...[/g]` -> Màu Xanh lá (#2B8A3E) giống "Động từ"
-/// - `[b]...[/b]` -> Màu Xanh dương (#1D64C8)
-/// - `[o]...[/o]` -> Màu Cam tím (#D9480F)
-/// - Tự động in nghiêng phần nằm trong dấu ngoặc đơn `(...)` ở phần Ghi chú giống hệt hình mẫu!
+/// Lưu thông tin một vùng văn bản được tô màu hoặc in nghiêng theo chỉ số ký tự [start, end)
+class StyledRange {
+  int start;
+  int end;
+  final String tag; // 'r' (Đỏ), 'g' (Xanh lá), 'b' (Xanh dương), 'o' (Cam), 'i' (Nghiêng)
+
+  StyledRange({
+    required this.start,
+    required this.end,
+    required this.tag,
+  });
+}
+
+/// Bộ điều khiển ô nhập văn bản WYSIWYG:
+/// - Hiển thị văn bản thuần túy (KHÔNG có ký tự `[r]`, `[/r]` trong ô nhập).
+/// - Khi người dùng bôi đen chữ hoặc chọn màu rồi gõ, chữ trong ô nhập hiển thị màu Đỏ / Xanh lá / Xanh dương / Cam / Nghiêng ngay lập tức!
+class RichHighlightTextController extends TextEditingController {
+  final List<StyledRange> ranges = [];
+  String? activeTypingTag; // Nếu người dùng bấm nút màu khi chưa bôi đen -> gõ chữ mới sẽ mang màu này
+  String _previousText = '';
+
+  RichHighlightTextController({String? initialTaggedText}) {
+    if (initialTaggedText != null && initialTaggedText.isNotEmpty) {
+      loadFromTaggedString(initialTaggedText);
+    }
+    addListener(_onTextChanged);
+  }
+
+  @override
+  void dispose() {
+    removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  /// Chuyển chuỗi có thẻ lưu trữ (VD: `[r]Chủ ngữ[/r] là...`) thành chữ thuần + danh sách vùng màu `ranges`
+  void loadFromTaggedString(String tagged) {
+    ranges.clear();
+    final buffer = StringBuffer();
+    final tagRegex = RegExp(r'\[(r|g|b|o|i)\](.*?)\[/\1\]', dotAll: true);
+    int lastEnd = 0;
+
+    for (final match in tagRegex.allMatches(tagged)) {
+      if (match.start > lastEnd) {
+        buffer.write(tagged.substring(lastEnd, match.start));
+      }
+      final tag = match.group(1)!;
+      final content = match.group(2) ?? '';
+      final startIdx = buffer.length;
+      buffer.write(content);
+      final endIdx = buffer.length;
+      if (endIdx > startIdx) {
+        ranges.add(StyledRange(start: startIdx, end: endIdx, tag: tag));
+      }
+      lastEnd = match.end;
+    }
+
+    if (lastEnd < tagged.length) {
+      buffer.write(tagged.substring(lastEnd));
+    }
+
+    final clean = buffer.toString();
+    _previousText = clean;
+    value = TextEditingValue(
+      text: clean,
+      selection: TextSelection.collapsed(offset: clean.length),
+    );
+  }
+
+  /// Xuất ngược ra chuỗi có thẻ `[r]...[/r]` để lưu vào bộ nhớ
+  String toTaggedString() {
+    if (text.isEmpty) return '';
+    if (ranges.isEmpty) return text;
+
+    final sorted = List<StyledRange>.from(ranges)
+      ..removeWhere((r) => r.end <= r.start || r.start >= text.length)
+      ..sort((a, b) => a.start.compareTo(b.start));
+
+    final buffer = StringBuffer();
+    int cursor = 0;
+
+    for (final r in sorted) {
+      final s = r.start.clamp(0, text.length);
+      final e = r.end.clamp(0, text.length);
+      if (e <= s || s < cursor) continue;
+
+      if (s > cursor) {
+        buffer.write(text.substring(cursor, s));
+      }
+      buffer.write('[${r.tag}]${text.substring(s, e)}[/${r.tag}]');
+      cursor = e;
+    }
+
+    if (cursor < text.length) {
+      buffer.write(text.substring(cursor));
+    }
+    return buffer.toString();
+  }
+
+  void _onTextChanged() {
+    final newText = text;
+    if (newText == _previousText) return;
+
+    final oldLen = _previousText.length;
+    final newLen = newText.length;
+    final delta = newLen - oldLen;
+
+    // Tìm vị trí đầu tiên thay đổi giữa chuỗi cũ và chuỗi mới
+    int changePos = 0;
+    final minLen = math.min(oldLen, newLen);
+    while (changePos < minLen &&
+        _previousText.codeUnitAt(changePos) == newText.codeUnitAt(changePos)) {
+      changePos++;
+    }
+
+    // Dịch chuyển các vùng màu phía sau vị trí gõ/xóa
+    for (final r in ranges) {
+      if (delta > 0) {
+        // Người dùng vừa gõ thêm chữ
+        if (changePos <= r.start) {
+          r.start += delta;
+          r.end += delta;
+        } else if (changePos < r.end) {
+          r.end += delta;
+        }
+      } else if (delta < 0) {
+        // Người dùng vừa xóa chữ
+        final delStart = changePos;
+        final delEnd = changePos - delta;
+        if (delEnd <= r.start) {
+          r.start += delta;
+          r.end += delta;
+        } else if (delStart >= r.end) {
+          // Không ảnh hưởng
+        } else {
+          // Xóa đè vào vùng màu
+          if (delStart <= r.start && delEnd >= r.end) {
+            r.start = delStart;
+            r.end = delStart;
+          } else if (delStart <= r.start && delEnd < r.end) {
+            r.start = delStart;
+            r.end += delta;
+          } else if (delStart > r.start && delEnd >= r.end) {
+            r.end = delStart;
+          } else {
+            r.end += delta;
+          }
+        }
+      }
+    }
+
+    // Nếu người dùng đang bật chế độ màu (activeTypingTag != null) và vừa gõ thêm chữ -> tô màu luôn chữ vừa gõ
+    if (delta > 0 && activeTypingTag != null) {
+      final insStart = changePos;
+      final insEnd = changePos + delta;
+      _applyTagToRange(insStart, insEnd, activeTypingTag!);
+    }
+
+    ranges.removeWhere((r) => r.end <= r.start);
+    _mergeAdjacentSameTagRanges();
+    _previousText = newText;
+  }
+
+  void _mergeAdjacentSameTagRanges() {
+    if (ranges.length <= 1) return;
+    ranges.sort((a, b) => a.start.compareTo(b.start));
+    final List<StyledRange> merged = [ranges.first];
+    for (int i = 1; i < ranges.length; i++) {
+      final prev = merged.last;
+      final curr = ranges[i];
+      if (curr.tag == prev.tag && curr.start <= prev.end) {
+        prev.end = math.max(prev.end, curr.end);
+      } else {
+        merged.add(curr);
+      }
+    }
+    ranges
+      ..clear()
+      ..addAll(merged);
+  }
+
+  void _applyTagToRange(int selStart, int selEnd, String? tag) {
+    if (selEnd <= selStart) return;
+    final List<StyledRange> updated = [];
+
+    for (final r in ranges) {
+      if (r.end <= selStart || r.start >= selEnd) {
+        updated.add(r);
+      } else {
+        if (r.start < selStart) {
+          updated.add(StyledRange(start: r.start, end: selStart, tag: r.tag));
+        }
+        if (r.end > selEnd) {
+          updated.add(StyledRange(start: selEnd, end: r.end, tag: r.tag));
+        }
+      }
+    }
+
+    if (tag != null) {
+      updated.add(StyledRange(start: selStart, end: selEnd, tag: tag));
+    }
+
+    ranges
+      ..clear()
+      ..addAll(updated);
+    _mergeAdjacentSameTagRanges();
+  }
+
+  /// Khi bấm vào 1 nút màu trên thanh công cụ:
+  /// - Nếu đang bôi đen chữ: Tô màu ngay đoạn chữ đó (hoặc bỏ màu nếu bấm lại cùng màu).
+  /// - Nếu không bôi đen chữ: Bật/tắt màu đó để gõ chữ tiếp theo ra đúng màu đó luôn.
+  void toggleStyleTag(String? tag) {
+    final sel = selection;
+    if (sel.isValid && !sel.isCollapsed) {
+      final s = math.min(sel.start, sel.end);
+      final e = math.max(sel.start, sel.end);
+
+      // Kiểm tra nếu đoạn đang bôi đen đã mang sẵn màu này rồi thì gỡ màu về mặc định
+      final alreadyHasSameTag =
+          ranges.any((r) => r.tag == tag && r.start <= s && r.end >= e);
+      _applyTagToRange(s, e, alreadyHasSameTag ? null : tag);
+      activeTypingTag = tag;
+      notifyListeners();
+    } else {
+      activeTypingTag = (activeTypingTag == tag) ? null : tag;
+      notifyListeners();
+    }
+  }
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final baseStyle = style ?? const TextStyle();
+    if (text.isEmpty || ranges.isEmpty) {
+      return TextSpan(text: text, style: baseStyle);
+    }
+
+    final sorted = List<StyledRange>.from(ranges)
+      ..removeWhere((r) => r.end <= r.start || r.start >= text.length)
+      ..sort((a, b) => a.start.compareTo(b.start));
+
+    final List<InlineSpan> children = [];
+    int cursor = 0;
+
+    for (final r in sorted) {
+      final s = r.start.clamp(0, text.length);
+      final e = r.end.clamp(0, text.length);
+      if (e <= s || s < cursor) continue;
+
+      if (s > cursor) {
+        children.add(
+          TextSpan(
+            text: text.substring(cursor, s),
+            style: baseStyle,
+          ),
+        );
+      }
+
+      children.add(
+        TextSpan(
+          text: text.substring(s, e),
+          style: NoteRichTextFormatter.applyTagStyle(baseStyle, r.tag),
+        ),
+      );
+      cursor = e;
+    }
+
+    if (cursor < text.length) {
+      children.add(
+        TextSpan(
+          text: text.substring(cursor),
+          style: baseStyle,
+        ),
+      );
+    }
+
+    return TextSpan(style: baseStyle, children: children);
+  }
+}
+
 class NoteRichTextFormatter {
   static const Color highlightRed = Color(0xFFC92A2A);
   static const Color highlightGreen = Color(0xFF2B8A3E);
   static const Color highlightBlue = Color(0xFF1D64C8);
   static const Color highlightOrange = Color(0xFFD9480F);
 
-  /// Xóa các thẻ `[r]`, `[/r]`... để hiển thị văn bản tóm tắt ở danh sách ngoài
   static String stripTags(String input) {
     return input.replaceAll(RegExp(r'\[/?(r|g|b|o|i)\]'), '');
   }
 
-  /// Dựng TextSpan cho phần **Khái niệm** (cỡ chữ to rõ 18.5, khoảng cách dòng thoáng, highlight từ khóa màu Đỏ/Xanh lá/Xanh dương)
+  static TextStyle applyTagStyle(TextStyle base, String tag,
+      {bool bold = true}) {
+    switch (tag) {
+      case 'r':
+        return base.copyWith(
+          color: highlightRed,
+          fontWeight: bold ? FontWeight.w700 : base.fontWeight,
+        );
+      case 'g':
+        return base.copyWith(
+          color: highlightGreen,
+          fontWeight: bold ? FontWeight.w700 : base.fontWeight,
+        );
+      case 'b':
+        return base.copyWith(
+          color: highlightBlue,
+          fontWeight: bold ? FontWeight.w700 : base.fontWeight,
+        );
+      case 'o':
+        return base.copyWith(
+          color: highlightOrange,
+          fontWeight: bold ? FontWeight.w700 : base.fontWeight,
+        );
+      case 'i':
+        return base.copyWith(fontStyle: FontStyle.italic);
+      default:
+        return base;
+    }
+  }
+
   static TextSpan buildConceptSpan(String rawText) {
-    final baseStyle = const TextStyle(
-      fontSize: 18.5,
-      height: 1.48,
+    final baseStyle = GoogleFonts.comfortaa(
+      fontSize: 18,
+      height: 1.5,
       fontWeight: FontWeight.w500,
-      color: Color(0xFF222222),
+      color: const Color(0xFF222222),
     );
     return TextSpan(
       style: baseStyle,
@@ -34,7 +340,6 @@ class NoteRichTextFormatter {
     );
   }
 
-  /// Dựng TextSpan cho phần **Ghi chú** (cỡ chữ 15.5, tự động in nghiêng nội dung trong ngoặc đơn `(...)` và dòng bắt đầu bằng `*` giống hình mẫu)
   static Widget buildNoteFormattedWidget(String rawText) {
     final lines = rawText.split('\n');
     return Column(
@@ -45,9 +350,9 @@ class NoteRichTextFormatter {
           return const SizedBox(height: 6);
         }
         final isStarHeader = trimmed.startsWith('*');
-        final lineBaseStyle = TextStyle(
-          fontSize: 15.5,
-          height: 1.52,
+        final lineBaseStyle = GoogleFonts.comfortaa(
+          fontSize: 15,
+          height: 1.55,
           fontWeight: isStarHeader ? FontWeight.w600 : FontWeight.w500,
           fontStyle: isStarHeader ? FontStyle.italic : FontStyle.normal,
           color: const Color(0xFF2B2B2B),
@@ -70,9 +375,6 @@ class NoteRichTextFormatter {
     String text,
     TextStyle baseStyle,
   ) {
-    // Tách các cụm nằm trong dấu ngoặc đơn (...) để tự động in nghiêng giống hình mẫu:
-    // VD: Danh từ / Cụm danh từ (Noun / Noun Phrase)
-    //     The + Tính từ ([r]chỉ nhóm người[/r]: the rich, the poor...)
     final List<InlineSpan> result = [];
     final parenRegex = RegExp(r'\([^()]+\)');
     int lastIdx = 0;
@@ -118,41 +420,12 @@ class NoteRichTextFormatter {
 
       final tag = match.group(1)!;
       final content = match.group(2) ?? '';
-      TextStyle highlightStyle = currentStyle;
-
-      switch (tag) {
-        case 'r':
-          highlightStyle = currentStyle.copyWith(
-            color: highlightRed,
-            fontWeight: isConcept ? FontWeight.w700 : FontWeight.w600,
-          );
-          break;
-        case 'g':
-          highlightStyle = currentStyle.copyWith(
-            color: highlightGreen,
-            fontWeight: isConcept ? FontWeight.w700 : FontWeight.w600,
-          );
-          break;
-        case 'b':
-          highlightStyle = currentStyle.copyWith(
-            color: highlightBlue,
-            fontWeight: isConcept ? FontWeight.w700 : FontWeight.w600,
-          );
-          break;
-        case 'o':
-          highlightStyle = currentStyle.copyWith(
-            color: highlightOrange,
-            fontWeight: isConcept ? FontWeight.w700 : FontWeight.w600,
-          );
-          break;
-        case 'i':
-          highlightStyle = currentStyle.copyWith(
-            fontStyle: FontStyle.italic,
-          );
-          break;
-      }
-
-      spans.add(TextSpan(text: content, style: highlightStyle));
+      spans.add(
+        TextSpan(
+          text: content,
+          style: applyTagStyle(currentStyle, tag, bold: isConcept),
+        ),
+      );
       lastEnd = match.end;
     }
 
@@ -235,10 +508,10 @@ class _NotesScreenState extends State<NotesScreen> {
           borderRadius: BorderRadius.circular(24),
         ),
         title: const Text(
-          'Xóa bài ghi chú này?',
+          'Xóa ghi chú này?',
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
-        content: Text('Bạn có chắc muốn xóa ghi chú "${note.title}" không?'),
+        content: Text('Bạn có muốn xóa "${note.title}" không?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -280,249 +553,154 @@ class _NotesScreenState extends State<NotesScreen> {
         backgroundColor: ChibiTheme.deepPink,
         foregroundColor: Colors.white,
         elevation: 4,
-        icon: const Icon(Icons.note_add_rounded),
+        icon: const Icon(Icons.add_rounded),
         label: const Text(
-          'Tạo ghi chú mới',
+          'Tạo ghi chú',
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
       ),
-      body: Column(
-        children: [
-          // Header giới thiệu tính năng Ghi chú (Khái niệm + Ghi chú có Highlight màu)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: ChibiTheme.kawaiiCardDecoration(
-                color: Colors.white,
-                borderColor: ChibiTheme.softPink,
-                radius: 26,
-              ),
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: Image.asset(
-                      'assets/images/chibi_review.jpg',
-                      width: 72,
-                      height: 72,
-                      fit: BoxFit.cover,
-                    ),
+      body: _notes.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: ChibiTheme.kawaiiCardDecoration(
+                    color: Colors.white,
+                    borderColor: ChibiTheme.softPink,
+                    radius: 28,
                   ),
-                  const SizedBox(width: 14),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Sổ Tay Khái Niệm & Ghi Chú 📝',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w900,
-                            color: ChibiTheme.textDark,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          'Khi nhập tách riêng ô Khái niệm và ô Ghi chú (hỗ trợ bôi màu từ khóa Đỏ, Xanh lá, Xanh dương). Khi xem chi tiết sẽ gộp thành trang bài học chuẩn!',
-                          style: TextStyle(
-                            fontSize: 12.2,
-                            color: ChibiTheme.textMuted,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          Expanded(
-            child: _notes.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Container(
-                        padding: const EdgeInsets.all(24),
-                        decoration: ChibiTheme.kawaiiCardDecoration(
-                          color: Colors.white,
-                          borderColor: ChibiTheme.softPink,
-                          radius: 28,
-                        ),
-                        child: const Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.menu_book_rounded,
-                              size: 52,
-                              color: ChibiTheme.deepPink,
-                            ),
-                            SizedBox(height: 12),
-                            Text(
-                              'Chưa có bài ghi chú nào!',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                            SizedBox(height: 6),
-                            Text(
-                              'Bấm nút "Tạo ghi chú mới" bên dưới để thêm Khái niệm và Ghi chú nhé!',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 13.5,
-                                color: ChibiTheme.textMuted,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
+                  child: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.edit_note_rounded,
+                        size: 52,
+                        color: ChibiTheme.deepPink,
+                      ),
+                      SizedBox(height: 10),
+                      Text(
+                        'Chưa có ghi chú nào',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(18, 4, 18, 96),
-                    itemCount: _notes.length,
-                    itemBuilder: (context, index) {
-                      final note = _notes[index];
-                      final previewConcept = note.blocks.isNotEmpty
-                          ? NoteRichTextFormatter.stripTags(
-                              note.blocks.first.conceptText)
-                          : '';
+                    ],
+                  ),
+                ),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 96),
+              itemCount: _notes.length,
+              itemBuilder: (context, index) {
+                final note = _notes[index];
+                final previewConcept = note.blocks.isNotEmpty
+                    ? NoteRichTextFormatter.stripTags(
+                        note.blocks.first.conceptText)
+                    : '';
 
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(24),
-                          onTap: () => _openNoteDetail(note),
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: ChibiTheme.kawaiiCardDecoration(
-                              color: Colors.white,
-                              borderColor: index.isEven
-                                  ? ChibiTheme.softPink
-                                  : ChibiTheme.pastelLavender,
-                              radius: 24,
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(24),
+                    onTap: () => _openNoteDetail(note),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: ChibiTheme.kawaiiCardDecoration(
+                        color: Colors.white,
+                        borderColor: index.isEven
+                            ? ChibiTheme.softPink
+                            : ChibiTheme.pastelLavender,
+                        radius: 24,
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: ChibiTheme.softPink,
+                              borderRadius: BorderRadius.circular(14),
                             ),
-                            child: Row(
+                            child: const Icon(
+                              Icons.article_rounded,
+                              color: ChibiTheme.deepPink,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Container(
-                                  width: 46,
-                                  height: 46,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: ChibiTheme.softPink,
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: const Icon(
-                                    Icons.article_rounded,
-                                    color: ChibiTheme.deepPink,
+                                Text(
+                                  note.title.toUpperCase(),
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w900,
+                                    color: ChibiTheme.textDark,
                                   ),
                                 ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        note.title.toUpperCase(),
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w900,
-                                          color: ChibiTheme.textDark,
-                                        ),
-                                      ),
-                                      if (note.subtitle.trim().isNotEmpty) ...[
-                                        const SizedBox(height: 3),
-                                        Text(
-                                          note.subtitle,
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            fontStyle: FontStyle.italic,
-                                            color: ChibiTheme.deepPink,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ],
-                                      if (previewConcept.isNotEmpty) ...[
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          previewConcept,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 13.5,
-                                            color: ChibiTheme.textMuted,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ],
-                                      const SizedBox(height: 8),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 10, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: ChibiTheme.softLavender,
-                                          borderRadius:
-                                              BorderRadius.circular(10),
-                                        ),
-                                        child: Text(
-                                          '${note.blocks.length} mục Khái niệm & Ghi chú • Chạm để xem chi tiết',
-                                          style: const TextStyle(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w800,
-                                            color: ChibiTheme.deepPink,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Column(
-                                  children: [
-                                    IconButton(
-                                      onPressed: () => _openCreateOrEditNote(
-                                          existing: note),
-                                      icon: const Icon(
-                                        Icons.edit_outlined,
-                                        color: ChibiTheme.deepPink,
-                                        size: 20,
-                                      ),
-                                      tooltip: 'Chỉnh sửa',
+                                if (note.subtitle.trim().isNotEmpty) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    note.subtitle,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontStyle: FontStyle.italic,
+                                      color: ChibiTheme.deepPink,
+                                      fontWeight: FontWeight.w700,
                                     ),
-                                    IconButton(
-                                      onPressed: () =>
-                                          _confirmDeleteNote(note),
-                                      icon: const Icon(
-                                        Icons.delete_outline_rounded,
-                                        color: ChibiTheme.textMuted,
-                                        size: 20,
-                                      ),
-                                      tooltip: 'Xóa',
+                                  ),
+                                ],
+                                if (previewConcept.isNotEmpty) ...[
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    previewConcept,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13.5,
+                                      color: ChibiTheme.textMuted,
+                                      fontWeight: FontWeight.w600,
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
-                        ),
-                      );
-                    },
+                          IconButton(
+                            onPressed: () =>
+                                _openCreateOrEditNote(existing: note),
+                            icon: const Icon(
+                              Icons.edit_outlined,
+                              color: ChibiTheme.deepPink,
+                              size: 20,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => _confirmDeleteNote(note),
+                            icon: const Icon(
+                              Icons.delete_outline_rounded,
+                              color: ChibiTheme.textMuted,
+                              size: 20,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-          ),
-        ],
-      ),
+                );
+              },
+            ),
     );
   }
 }
 
-/// Màn hình XEM CHI TIẾT GHI CHÚ:
-/// Gộp các phần Khái niệm và Ghi chú thành một trang tài liệu liền mạch, sạch đẹp,
-/// có highlight màu Đỏ / Xanh lá / Xanh dương và chữ nghiêng trong ngoặc đơn giống hệt hình mẫu.
+/// Màn hình XEM CHI TIẾT GHI CHÚ (Gộp Khái niệm & Ghi chú giống hệt hình mẫu)
 class NoteDetailScreen extends StatefulWidget {
   final StudyNoteItem note;
   final ValueChanged<List<StudyNoteItem>> onNoteUpdated;
@@ -576,7 +754,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
             icon: const Icon(Icons.edit_rounded,
                 size: 18, color: ChibiTheme.deepPink),
             label: const Text(
-              'Chỉnh sửa',
+              'Sửa',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 color: ChibiTheme.deepPink,
@@ -591,56 +769,45 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. Tiêu đề chính in hoa giống hình mẫu: "THÀNH PHẦN CÂU TRONG TIẾNG ANH"
             Text(
               _currentNote.title.toUpperCase(),
-              style: const TextStyle(
-                fontSize: 21,
+              style: GoogleFonts.comfortaa(
+                fontSize: 20,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.3,
-                color: Color(0xFF1A1A1A),
+                color: const Color(0xFF1A1A1A),
               ),
             ),
-
-            // 2. Dòng khái niệm bao quát in nghiêng giống hình mẫu: "* Khái niệm bao quát: Vị trí, bản chất, chức năng"
             if (_currentNote.subtitle.trim().isNotEmpty) ...[
               const SizedBox(height: 18),
               Text(
                 _currentNote.subtitle.trim().startsWith('*')
                     ? _currentNote.subtitle.trim()
                     : '* ${_currentNote.subtitle.trim()}',
-                style: const TextStyle(
-                  fontSize: 16.5,
+                style: GoogleFonts.comfortaa(
+                  fontSize: 16,
                   fontStyle: FontStyle.italic,
                   fontWeight: FontWeight.w500,
-                  color: Color(0xFF2B2B2B),
+                  color: const Color(0xFF2B2B2B),
                 ),
               ),
             ],
-
             const SizedBox(height: 24),
-
-            // 3. Gộp từng cặp (Khái niệm + Ghi chú) liền mạch theo đúng bố cục hình mẫu
             ..._currentNote.blocks.map((block) {
               return Padding(
                 padding: const EdgeInsets.only(bottom: 30),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Khối KHÁI NIỆM (Chữ lớn 18.5, từ khóa highlight màu Đỏ / Xanh lá)
                     if (block.conceptText.trim().isNotEmpty)
                       RichText(
                         text: NoteRichTextFormatter.buildConceptSpan(
                           block.conceptText.trim(),
                         ),
                       ),
-
-                    // Khoảng cách giữa Khái niệm và Ghi chú bên dưới
                     if (block.conceptText.trim().isNotEmpty &&
                         block.noteText.trim().isNotEmpty)
                       const SizedBox(height: 18),
-
-                    // Khối GHI CHÚ (Chữ vừa 15.5, dòng * tiêu đề phụ & chữ trong ngoặc (...) tự động in nghiêng + highlight màu)
                     if (block.noteText.trim().isNotEmpty)
                       NoteRichTextFormatter.buildNoteFormattedWidget(
                         block.noteText.trim(),
@@ -656,20 +823,19 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   }
 }
 
-/// Màn hình NHẬP / CHỈNH SỬA GHI CHÚ:
-/// Phần "Khái niệm" và "Ghi chú" được tách thành 2 ô nhập riêng biệt,
-/// kèm thanh công cụ bôi màu Highlight (Đỏ, Xanh lá, Xanh dương, Cam, In nghiêng) chỉ với 1 chạm.
+/// Bộ điều khiển 1 cặp (Khái niệm + Ghi chú) dùng RichHighlightTextController (hiển thị màu trực tiếp, không hiện [r])
 class _BlockControllers {
   final String id;
-  final TextEditingController conceptCtrl;
-  final TextEditingController noteCtrl;
+  final RichHighlightTextController conceptCtrl;
+  final RichHighlightTextController noteCtrl;
 
   _BlockControllers({
     required this.id,
     required String concept,
     required String note,
-  })  : conceptCtrl = TextEditingController(text: concept),
-        noteCtrl = TextEditingController(text: note);
+  })  : conceptCtrl =
+            RichHighlightTextController(initialTaggedText: concept),
+        noteCtrl = RichHighlightTextController(initialTaggedText: note);
 
   void dispose() {
     conceptCtrl.dispose();
@@ -750,41 +916,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     super.dispose();
   }
 
-  /// Chèn thẻ highlight màu sắc `[r]...[/r]`, `[g]...[/g]`, `[b]...[/b]` vào đoạn văn bản đang bôi đen
-  /// (hoặc chèn tại vị trí con trỏ nếu chưa bôi đen)
-  void _applyHighlightTag(TextEditingController controller, String tag) {
-    final text = controller.text;
-    final selection = controller.selection;
-    final openTag = '[$tag]';
-    final closeTag = '[/$tag]';
-
-    if (selection.isValid && !selection.isCollapsed) {
-      final selectedText = text.substring(selection.start, selection.end);
-      final replacement = '$openTag$selectedText$closeTag';
-      final newText =
-          text.replaceRange(selection.start, selection.end, replacement);
-      controller.value = TextEditingValue(
-        text: newText,
-        selection: TextSelection.collapsed(
-          offset: selection.start + replacement.length,
-        ),
-      );
-    } else {
-      final cursor = selection.isValid ? selection.baseOffset : text.length;
-      const sample = 'từ khóa';
-      final insert = '$openTag$sample$closeTag';
-      final newText = text.replaceRange(cursor, cursor, insert);
-      controller.value = TextEditingValue(
-        text: newText,
-        selection: TextSelection(
-          baseOffset: cursor + openTag.length,
-          extentOffset: cursor + openTag.length + sample.length,
-        ),
-      );
-    }
-    setState(() {});
-  }
-
   void _saveNote() {
     final title = _titleController.text.trim();
     if (title.isEmpty) {
@@ -796,7 +927,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             borderRadius: BorderRadius.circular(14),
           ),
           content: const Text(
-            'Bạn hãy nhập Tiêu đề bài ghi chú nhé!',
+            'Vui lòng nhập tiêu đề!',
             style: TextStyle(fontWeight: FontWeight.w800),
           ),
         ),
@@ -811,8 +942,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         .map(
           (b) => NoteConceptBlock(
             id: b.id,
-            conceptText: b.conceptCtrl.text.trim(),
-            noteText: b.noteCtrl.text.trim(),
+            conceptText: b.conceptCtrl.toTaggedString().trim(),
+            noteText: b.noteCtrl.toTaggedString().trim(),
           ),
         )
         .toList();
@@ -826,7 +957,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             borderRadius: BorderRadius.circular(14),
           ),
           content: const Text(
-            'Bạn hãy nhập ít nhất 1 mục Khái niệm hoặc Ghi chú nhé!',
+            'Vui lòng nhập nội dung Khái niệm hoặc Ghi chú!',
             style: TextStyle(fontWeight: FontWeight.w800),
           ),
         ),
@@ -852,7 +983,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     return Scaffold(
       backgroundColor: ChibiTheme.bgCream,
       appBar: AppBar(
-        title: Text(isEditing ? 'Chỉnh Sửa Ghi Chú' : 'Tạo Ghi Chú Mới'),
+        title: Text(isEditing ? 'Sửa Ghi Chú' : 'Tạo Ghi Chú'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -875,70 +1006,57 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(18, 10, 18, 40),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 36),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Khung nhập Tiêu đề & Khái niệm bao quát
+            // Khung Tiêu đề gọn gàng
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               decoration: ChibiTheme.kawaiiCardDecoration(
                 color: Colors.white,
                 borderColor: ChibiTheme.softPink,
-                radius: 24,
+                radius: 22,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Tiêu đề bài học:',
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w900,
-                      color: ChibiTheme.deepPink,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
                   TextField(
                     controller: _titleController,
                     style: const TextStyle(
-                      fontSize: 17,
+                      fontSize: 16.5,
                       fontWeight: FontWeight.w900,
                     ),
                     decoration: InputDecoration(
-                      hintText: 'VD: THÀNH PHẦN CÂU TRONG TIẾNG ANH',
+                      labelText: 'Tiêu đề',
+                      hintText: 'Nhập tiêu đề...',
                       filled: true,
                       fillColor: ChibiTheme.bgCream,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(14),
                         borderSide: BorderSide.none,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Mô tả / Khái niệm bao quát (Tùy chọn):',
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w800,
-                      color: ChibiTheme.textMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 10),
                   TextField(
                     controller: _subtitleController,
                     style: const TextStyle(
-                      fontSize: 14.5,
+                      fontSize: 14,
                       fontStyle: FontStyle.italic,
                       fontWeight: FontWeight.w600,
                     ),
                     decoration: InputDecoration(
-                      hintText:
-                          'VD: * Khái niệm bao quát: Vị trí, bản chất, chức năng',
+                      labelText: 'Mô tả ngắn (tùy chọn)',
+                      hintText: 'Nhập mô tả...',
                       filled: true,
                       fillColor: ChibiTheme.bgCream,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(14),
                         borderSide: BorderSide.none,
                       ),
                     ),
@@ -946,46 +1064,19 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
 
-            // Hướng dẫn bôi màu
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: ChibiTheme.softLavender,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.palette_rounded,
-                      color: ChibiTheme.deepPink, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Mẹo: Bôi đen từ bất kỳ trong ô Khái niệm hoặc ô Ghi chú rồi bấm nút màu (Đỏ, Xanh lá, Xanh dương) để highlight. Các chữ trong ngoặc đơn (...) sẽ tự động in nghiêng khi xem chi tiết!',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: ChibiTheme.textDark,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // Danh sách các cặp (Ô Khái niệm tách riêng + Ô Ghi chú tách riêng)
+            // Các mục Khái niệm & Ghi chú gọn gàng, trực quan
             ...List.generate(_blockCtrls.length, (index) {
               final block = _blockCtrls[index];
               return Padding(
-                padding: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.only(bottom: 12),
                 child: Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(14),
                   decoration: ChibiTheme.kawaiiCardDecoration(
                     color: Colors.white,
                     borderColor: ChibiTheme.pastelLavender,
-                    radius: 24,
+                    radius: 22,
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -993,146 +1084,100 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: ChibiTheme.softPink,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              'Mục #${index + 1}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                color: ChibiTheme.deepPink,
-                              ),
+                          Text(
+                            'Mục #${index + 1}',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900,
+                              color: ChibiTheme.deepPink,
                             ),
                           ),
                           if (_blockCtrls.length > 1)
-                            TextButton.icon(
+                            IconButton(
                               onPressed: () => _removeBlock(index),
-                              icon: const Icon(Icons.delete_outline_rounded,
-                                  color: Colors.redAccent, size: 18),
-                              label: const Text(
-                                'Xóa mục này',
-                                style: TextStyle(
-                                  color: Colors.redAccent,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 12.5,
-                                ),
-                              ),
+                              icon: const Icon(Icons.close_rounded,
+                                  color: Colors.redAccent, size: 20),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Xóa mục',
                             ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-
-                      // Ô 1: KHÁI NIỆM (Nhập tách riêng)
-                      const Text(
-                        '1. Phần Khái niệm (Nhập riêng):',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          color: ChibiTheme.textDark,
-                        ),
-                      ),
                       const SizedBox(height: 6),
-                      _buildColorToolbar(block.conceptCtrl),
+
+                      // Ô 1: Khái niệm
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Khái niệm',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w900,
+                              color: ChibiTheme.textDark,
+                            ),
+                          ),
+                          _buildColorToolbar(block.conceptCtrl),
+                        ],
+                      ),
                       const SizedBox(height: 6),
                       TextField(
                         controller: block.conceptCtrl,
-                        maxLines: 4,
-                        onChanged: (_) => setState(() {}),
+                        maxLines: 3,
+                        minLines: 2,
                         style: const TextStyle(
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF222222),
                         ),
                         decoration: InputDecoration(
-                          hintText:
-                              'VD: [r]Chủ ngữ[/r] là những từ thường đứng trước động từ, quyết định [r]chia động từ[/r] đó hay không...',
+                          hintText: 'Nhập khái niệm...',
                           filled: true,
                           fillColor: ChibiTheme.bgCream,
+                          contentPadding: const EdgeInsets.all(12),
                           border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(14),
                             borderSide: BorderSide.none,
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
 
-                      // Ô 2: GHI CHÚ (Nhập tách riêng)
-                      const Text(
-                        '2. Phần Ghi chú chi tiết (Nhập riêng):',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          color: ChibiTheme.textDark,
-                        ),
+                      // Ô 2: Ghi chú
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Ghi chú',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w900,
+                              color: ChibiTheme.textDark,
+                            ),
+                          ),
+                          _buildColorToolbar(block.noteCtrl),
+                        ],
                       ),
-                      const SizedBox(height: 6),
-                      _buildColorToolbar(block.noteCtrl),
                       const SizedBox(height: 6),
                       TextField(
                         controller: block.noteCtrl,
-                        maxLines: 6,
-                        onChanged: (_) => setState(() {}),
+                        maxLines: 5,
+                        minLines: 3,
                         style: const TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF2B2B2B),
                         ),
                         decoration: InputDecoration(
-                          hintText: '* Từ loại đóng vai trò chủ ngữ:\n'
-                              'Danh từ / Cụm danh từ (Noun / Noun Phrase)\n'
-                              'The + Tính từ ([r]chỉ nhóm người[/r]: the rich, the poor...)',
+                          hintText: 'Nhập ghi chú...',
                           filled: true,
                           fillColor: ChibiTheme.bgCream,
+                          contentPadding: const EdgeInsets.all(12),
                           border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(14),
                             borderSide: BorderSide.none,
                           ),
                         ),
                       ),
-
-                      // Xem trước trực tiếp khi gộp Khái niệm + Ghi chú
-                      if (block.conceptCtrl.text.trim().isNotEmpty ||
-                          block.noteCtrl.text.trim().isNotEmpty) ...[
-                        const Divider(height: 24, color: ChibiTheme.softPink),
-                        const Text(
-                          'Xem trước khi gộp (Chi tiết):',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                            color: ChibiTheme.textMuted,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: ChibiTheme.softPink),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (block.conceptCtrl.text.trim().isNotEmpty)
-                                RichText(
-                                  text: NoteRichTextFormatter.buildConceptSpan(
-                                    block.conceptCtrl.text.trim(),
-                                  ),
-                                ),
-                              if (block.conceptCtrl.text.trim().isNotEmpty &&
-                                  block.noteCtrl.text.trim().isNotEmpty)
-                                const SizedBox(height: 12),
-                              if (block.noteCtrl.text.trim().isNotEmpty)
-                                NoteRichTextFormatter.buildNoteFormattedWidget(
-                                  block.noteCtrl.text.trim(),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -1142,41 +1187,19 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             OutlinedButton.icon(
               onPressed: _addEmptyBlock,
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                side:
-                    const BorderSide(color: ChibiTheme.deepPink, width: 2),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                side: const BorderSide(color: ChibiTheme.deepPink, width: 1.8),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(18),
                 ),
               ),
-              icon: const Icon(Icons.add_circle_outline_rounded,
-                  color: ChibiTheme.deepPink),
+              icon: const Icon(Icons.add_rounded, color: ChibiTheme.deepPink),
               label: const Text(
-                'Thêm cặp Khái niệm & Ghi chú tiếp theo',
+                'Thêm mục',
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: 14.5,
                   fontWeight: FontWeight.w900,
                   color: ChibiTheme.deepPink,
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            ElevatedButton.icon(
-              onPressed: _saveNote,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: ChibiTheme.deepPink,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-              ),
-              icon: const Icon(Icons.save_rounded),
-              label: const Text(
-                'Lưu bài ghi chú',
-                style: TextStyle(
-                  fontSize: 16.5,
-                  fontWeight: FontWeight.w900,
                 ),
               ),
             ),
@@ -1186,76 +1209,96 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
-  Widget _buildColorToolbar(TextEditingController controller) {
-    return Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      children: [
-        _buildColorChip(
-          label: 'Chữ Đỏ',
-          color: NoteRichTextFormatter.highlightRed,
-          onTap: () => _applyHighlightTag(controller, 'r'),
-        ),
-        _buildColorChip(
-          label: 'Chữ Xanh lá',
-          color: NoteRichTextFormatter.highlightGreen,
-          onTap: () => _applyHighlightTag(controller, 'g'),
-        ),
-        _buildColorChip(
-          label: 'Chữ Xanh dương',
-          color: NoteRichTextFormatter.highlightBlue,
-          onTap: () => _applyHighlightTag(controller, 'b'),
-        ),
-        _buildColorChip(
-          label: 'Chữ Cam',
-          color: NoteRichTextFormatter.highlightOrange,
-          onTap: () => _applyHighlightTag(controller, 'o'),
-        ),
-        _buildColorChip(
-          label: 'In nghiêng',
-          color: ChibiTheme.textMuted,
-          onTap: () => _applyHighlightTag(controller, 'i'),
-        ),
-      ],
+  /// Thanh nút chọn màu nhỏ gọn: Bấm vào là chữ đang bôi đen (hoặc chữ gõ tiếp theo) đổi màu trực tiếp, không hiện ký tự [r]
+  Widget _buildColorToolbar(RichHighlightTextController controller) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final active = controller.activeTypingTag;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildColorDot(
+              label: 'Đỏ',
+              color: NoteRichTextFormatter.highlightRed,
+              isSelected: active == 'r',
+              onTap: () {
+                controller.toggleStyleTag('r');
+                setState(() {});
+              },
+            ),
+            const SizedBox(width: 6),
+            _buildColorDot(
+              label: 'Xanh lá',
+              color: NoteRichTextFormatter.highlightGreen,
+              isSelected: active == 'g',
+              onTap: () {
+                controller.toggleStyleTag('g');
+                setState(() {});
+              },
+            ),
+            const SizedBox(width: 6),
+            _buildColorDot(
+              label: 'Xanh',
+              color: NoteRichTextFormatter.highlightBlue,
+              isSelected: active == 'b',
+              onTap: () {
+                controller.toggleStyleTag('b');
+                setState(() {});
+              },
+            ),
+            const SizedBox(width: 6),
+            _buildColorDot(
+              label: 'Cam',
+              color: NoteRichTextFormatter.highlightOrange,
+              isSelected: active == 'o',
+              onTap: () {
+                controller.toggleStyleTag('o');
+                setState(() {});
+              },
+            ),
+            const SizedBox(width: 6),
+            _buildColorDot(
+              label: 'Thường',
+              color: ChibiTheme.textDark,
+              isSelected: active == null,
+              onTap: () {
+                controller.toggleStyleTag(null);
+                setState(() {});
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildColorChip({
+  Widget _buildColorDot({
     required String label,
     required Color color,
+    required bool isSelected,
     required VoidCallback onTap,
   }) {
     return InkWell(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withValues(alpha: 0.5)),
+          color: isSelected ? color : color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: color,
+            width: isSelected ? 1.8 : 1,
+          ),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: color,
-              ),
-            ),
-          ],
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: isSelected ? Colors.white : color,
+          ),
         ),
       ),
     );
