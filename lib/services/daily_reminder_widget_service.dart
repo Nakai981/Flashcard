@@ -188,15 +188,12 @@ class DailyReminderWidgetService {
     await prefs.setString(_widgetMeaningKey, widgetMeaning);
     await prefs.setString(_widgetSummaryKey, widgetSummary);
 
-    // 1. Yêu cầu cả iOS (WidgetKit Lock Screen / Home Screen) và Android (AppWidget) cập nhật ngay
-    try {
-      await _widgetChannel.invokeMethod('updateWidget', {
-        'word': widgetWord,
-        'phonetic': widgetPhonetic,
-        'meaning': widgetMeaning,
-        'summary': widgetSummary,
-      });
-    } catch (_) {}
+    // 1. Yêu cầu Android cập nhật Native AppWidget ngoài màn hình chính / màn hình khóa (chỉ chạy trên Android, không cần Apple Developer Team trên iOS)
+    if (Platform.isAndroid) {
+      try {
+        await _widgetChannel.invokeMethod('updateWidget');
+      } catch (_) {}
+    }
 
     // 2. Hiển thị / Cập nhật Tiện ích Từ Mới Trong Ngày trên Màn hình khóa (Lock Screen)
     if (!_lockScreenWidgetEnabled || todayWords.isEmpty) {
