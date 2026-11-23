@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/flashcard_model.dart';
 import '../services/audio_speech_service.dart';
 import '../services/topic_vocab_service.dart';
@@ -20,6 +21,8 @@ class TopicVocabScreen extends StatefulWidget {
 }
 
 class _TopicVocabScreenState extends State<TopicVocabScreen> {
+  static const String _skippedWordsPrefKey = 'chibi_topic_skipped_words_v1';
+
   List<VocabBookGroup> _books = [];
   bool _isLoading = true;
   // -1 = Hiển thị tất cả 150 Topic (3.000 từ) của cả 5 Tập; 0..4 = Lọc riêng từng Tập
@@ -27,6 +30,7 @@ class _TopicVocabScreenState extends State<TopicVocabScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<TopicWordItem> _searchResults = [];
   bool _isSearching = false;
+  Set<String> _skippedWords = {};
 
   @override
   void initState() {
@@ -41,12 +45,28 @@ class _TopicVocabScreenState extends State<TopicVocabScreen> {
   }
 
   Future<void> _loadTopics() async {
+    final prefs = await SharedPreferences.getInstance();
+    final skippedList = prefs.getStringList(_skippedWordsPrefKey) ?? [];
     final books = await TopicVocabService.loadAllBooks();
     if (!mounted) return;
     setState(() {
+      _skippedWords = skippedList.map((e) => e.toLowerCase()).toSet();
       _books = books;
       _isLoading = false;
     });
+  }
+
+  Future<void> _toggleSkipWord(String englishWord) async {
+    final key = englishWord.trim().toLowerCase();
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      if (_skippedWords.contains(key)) {
+        _skippedWords.remove(key);
+      } else {
+        _skippedWords.add(key);
+      }
+    });
+    await prefs.setStringList(_skippedWordsPrefKey, _skippedWords.toList());
   }
 
   Future<void> _onSearchChanged(String query) async {
@@ -79,6 +99,8 @@ class _TopicVocabScreenState extends State<TopicVocabScreen> {
           topic: topic,
           userFlashcards: widget.userFlashcards,
           onAddWordToFlashcards: widget.onAddWordToFlashcards,
+          skippedWords: _skippedWords,
+          onToggleSkipWord: _toggleSkipWord,
         ),
       ),
     );
@@ -339,112 +361,155 @@ class _TopicVocabScreenState extends State<TopicVocabScreen> {
       );
     }
 
+    // Sắp xếp đưa các từ đã bấm "Bỏ qua" xuống cuối danh sách tìm kiếm
+    final sortedResults = List<TopicWordItem>.from(_searchResults)
+      ..sort((a, b) {
+        final aSkipped =
+            _skippedWords.contains(a.englishWord.trim().toLowerCase());
+        final bSkipped =
+            _skippedWords.contains(b.englishWord.trim().toLowerCase());
+        if (aSkipped != bSkipped) {
+          return aSkipped ? 1 : -1;
+        }
+        return 0;
+      });
+
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
-      itemCount: _searchResults.length,
+      itemCount: sortedResults.length,
       itemBuilder: (context, index) {
-        final word = _searchResults[index];
+        final word = sortedResults[index];
         final added = _isAlreadyInUserFlashcards(word.englishWord);
+        final isSkipped =
+            _skippedWords.contains(word.englishWord.trim().toLowerCase());
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: ChibiTheme.kawaiiCardDecoration(
-              color: Colors.white,
-              borderColor: ChibiTheme.softPink,
-              radius: 22,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            word.englishWord,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                              color: ChibiTheme.deepPink,
-                            ),
-                          ),
-                          if (word.phonetic.isNotEmpty) ...[
-                            const SizedBox(width: 8),
+          child: Opacity(
+            opacity: isSkipped ? 0.55 : 1.0,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: ChibiTheme.kawaiiCardDecoration(
+                color: Colors.white,
+                borderColor: ChibiTheme.softPink,
+                radius: 22,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
                             Text(
-                              '/${word.phonetic}/',
-                              style: const TextStyle(
-                                fontSize: 12.5,
-                                fontStyle: FontStyle.italic,
-                                color: ChibiTheme.textMuted,
+                              word.englishWord,
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                                color: ChibiTheme.deepPink,
+                                decoration: isSkipped
+                                    ? TextDecoration.lineThrough
+                                    : null,
                               ),
                             ),
+                            if (word.phonetic.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  '/${word.phonetic}/',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontStyle: FontStyle.italic,
+                                    color: ChibiTheme.textMuted,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        word.primaryVietnamese,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: ChibiTheme.textDark,
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        word.topicName,
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          color: ChibiTheme.textMuted,
-                          fontWeight: FontWeight.w700,
+                        const SizedBox(height: 2),
+                        Text(
+                          word.primaryVietnamese,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: ChibiTheme.textDark,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: () =>
-                      AudioSpeechService.speakEnglishWord(word.englishWord),
-                  icon: const Icon(
-                    Icons.volume_up_rounded,
-                    color: ChibiTheme.deepPink,
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: added
-                      ? null
-                      : () {
-                          final card = word.toFlashcardItem(
-                            indexNumber: widget.userFlashcards.length + 1,
-                          );
-                          widget.onAddWordToFlashcards(card);
-                          setState(() {});
-                        },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: ChibiTheme.deepPink,
-                    foregroundColor: Colors.white,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
+                        const SizedBox(height: 2),
+                        Text(
+                          word.topicName,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: ChibiTheme.textMuted,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  icon: Icon(
-                    added ? Icons.check_rounded : Icons.add_rounded,
-                    size: 16,
+                  IconButton(
+                    onPressed: () =>
+                        AudioSpeechService.speakEnglishWord(word.englishWord),
+                    icon: const Icon(
+                      Icons.volume_up_rounded,
+                      color: ChibiTheme.deepPink,
+                    ),
+                    visualDensity: VisualDensity.compact,
                   ),
-                  label: Text(
-                    added ? 'Đã có' : 'Thêm thẻ',
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
+                  TextButton(
+                    onPressed: () => _toggleSkipWord(word.englishWord),
+                    style: TextButton.styleFrom(
+                      foregroundColor: ChibiTheme.textMuted,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      isSkipped ? 'Khôi phục' : 'Bỏ qua',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  ElevatedButton.icon(
+                    onPressed: added
+                        ? null
+                        : () {
+                            final card = word.toFlashcardItem(
+                              indexNumber: widget.userFlashcards.length + 1,
+                            );
+                            widget.onAddWordToFlashcards(card);
+                            setState(() {});
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ChibiTheme.deepPink,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    icon: Icon(
+                      added ? Icons.check_rounded : Icons.add_rounded,
+                      size: 16,
+                    ),
+                    label: Text(
+                      added ? 'Đã có' : 'Thêm',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -457,12 +522,16 @@ class TopicUnitDetailScreen extends StatefulWidget {
   final VocabTopicUnit topic;
   final List<FlashcardItem> userFlashcards;
   final ValueChanged<FlashcardItem> onAddWordToFlashcards;
+  final Set<String> skippedWords;
+  final Future<void> Function(String englishWord) onToggleSkipWord;
 
   const TopicUnitDetailScreen({
     super.key,
     required this.topic,
     required this.userFlashcards,
     required this.onAddWordToFlashcards,
+    required this.skippedWords,
+    required this.onToggleSkipWord,
   });
 
   @override
@@ -479,17 +548,38 @@ class _TopicUnitDetailScreenState extends State<TopicUnitDetailScreen> {
         .any((item) => item.englishWord.trim().toLowerCase() == key);
   }
 
-  List<FlashcardItem> _buildTopicFlashcardList() {
+  bool _isSkipped(String englishWord) {
+    final key = englishWord.trim().toLowerCase();
+    return widget.skippedWords.contains(key);
+  }
+
+  /// Danh sách các từ trong Topic được sắp xếp sao cho những từ bấm "Bỏ qua" tự động chuyển xuống cuối danh sách
+  List<TopicWordItem> _getOrderedTopicWords() {
+    final activeWords = <TopicWordItem>[];
+    final skippedWords = <TopicWordItem>[];
+    for (final w in widget.topic.words) {
+      if (_isSkipped(w.englishWord)) {
+        skippedWords.add(w);
+      } else {
+        activeWords.add(w);
+      }
+    }
+    return [...activeWords, ...skippedWords];
+  }
+
+  List<FlashcardItem> _buildTopicFlashcardList(
+      List<TopicWordItem> orderedWords) {
     final List<FlashcardItem> list = [];
-    for (int i = 0; i < widget.topic.words.length; i++) {
-      list.add(widget.topic.words[i].toFlashcardItem(indexNumber: i + 1));
+    for (int i = 0; i < orderedWords.length; i++) {
+      list.add(orderedWords[i].toFlashcardItem(indexNumber: i + 1));
     }
     return list;
   }
 
   @override
   Widget build(BuildContext context) {
-    final topicFlashcards = _buildTopicFlashcardList();
+    final orderedWords = _getOrderedTopicWords();
+    final topicFlashcards = _buildTopicFlashcardList(orderedWords);
 
     return Scaffold(
       appBar: AppBar(
@@ -532,7 +622,7 @@ class _TopicUnitDetailScreenState extends State<TopicUnitDetailScreen> {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'Chạm vào từ bất kỳ để lật thẻ & thu âm kiểm tra phát âm bằng Google Dịch!',
+                          'Chạm vào từ để học hoặc bấm "Bỏ qua" để đẩy từ xuống cuối danh sách!',
                           style: TextStyle(
                             fontSize: 12.5,
                             color: ChibiTheme.textMuted,
@@ -583,150 +673,192 @@ class _TopicUnitDetailScreenState extends State<TopicUnitDetailScreen> {
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
-              itemCount: widget.topic.words.length,
+              itemCount: orderedWords.length,
               itemBuilder: (context, index) {
-                final word = widget.topic.words[index];
+                final word = orderedWords[index];
                 final added = _isAdded(word.englishWord);
+                final skipped = _isSkipped(word.englishWord);
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(22),
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => FlashcardStudyScreen(
-                            flashcards: topicFlashcards,
-                            initialIndex: index,
-                          ),
-                        ),
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: ChibiTheme.kawaiiCardDecoration(
-                        color: Colors.white,
-                        borderColor: index.isEven
-                            ? ChibiTheme.softPink
-                            : ChibiTheme.pastelLavender,
-                        radius: 22,
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color: ChibiTheme.softPink,
-                              borderRadius: BorderRadius.circular(14),
+                  child: Opacity(
+                    opacity: skipped ? 0.55 : 1.0,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(22),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => FlashcardStudyScreen(
+                              flashcards: topicFlashcards,
+                              initialIndex: index,
                             ),
-                            child: Text(
-                              '#${index + 1}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                color: ChibiTheme.deepPink,
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: ChibiTheme.kawaiiCardDecoration(
+                          color: Colors.white,
+                          borderColor: index.isEven
+                              ? ChibiTheme.softPink
+                              : ChibiTheme.pastelLavender,
+                          radius: 22,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: ChibiTheme.softPink,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Text(
+                                '#${index + 1}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  color: ChibiTheme.deepPink,
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      word.englishWord,
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w900,
-                                        color: ChibiTheme.textDark,
-                                      ),
-                                    ),
-                                    if (word.phonetic.isNotEmpty) ...[
-                                      const SizedBox(width: 8),
-                                      Flexible(
-                                        child: Text(
-                                          '/${word.phonetic}/',
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 12.5,
-                                            fontStyle: FontStyle.italic,
-                                            color: ChibiTheme.textMuted,
-                                          ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        word.englishWord,
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w900,
+                                          color: ChibiTheme.textDark,
+                                          decoration: skipped
+                                              ? TextDecoration.lineThrough
+                                              : null,
                                         ),
                                       ),
+                                      if (word.phonetic.isNotEmpty) ...[
+                                        const SizedBox(width: 8),
+                                        Flexible(
+                                          child: Text(
+                                            '/${word.phonetic}/',
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12.5,
+                                              fontStyle: FontStyle.italic,
+                                              color: ChibiTheme.textMuted,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  word.primaryVietnamese,
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: ChibiTheme.deepPink,
                                   ),
-                                ),
-                                if (word.definition.isNotEmpty) ...[
                                   const SizedBox(height: 2),
                                   Text(
-                                    word.definition,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                    word.primaryVietnamese,
                                     style: const TextStyle(
-                                      fontSize: 12,
-                                      color: ChibiTheme.textMuted,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w800,
+                                      color: ChibiTheme.deepPink,
                                     ),
                                   ),
+                                  if (word.definition.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      word.definition,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: ChibiTheme.textMuted,
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
-                          ),
-                          IconButton(
-                            onPressed: () =>
-                                AudioSpeechService.speakEnglishWord(
-                                    word.englishWord),
-                            icon: const Icon(
-                              Icons.volume_up_rounded,
-                              color: ChibiTheme.deepPink,
+                            IconButton(
+                              onPressed: () =>
+                                  AudioSpeechService.speakEnglishWord(
+                                      word.englishWord),
+                              icon: const Icon(
+                                Icons.volume_up_rounded,
+                                color: ChibiTheme.deepPink,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Nghe phát âm',
                             ),
-                            tooltip: 'Nghe phát âm Google Dịch',
-                          ),
-                          IconButton.filledTonal(
-                            onPressed: added
-                                ? null
-                                : () {
-                                    final card = word.toFlashcardItem(
-                                      indexNumber:
-                                          widget.userFlashcards.length + 1,
-                                    );
-                                    widget.onAddWordToFlashcards(card);
-                                    setState(() {
-                                      _locallyAddedWords.add(
-                                          word.englishWord.trim().toLowerCase());
-                                    });
-                                  },
-                            style: IconButton.styleFrom(
-                              backgroundColor: added
-                                  ? const Color(0xFFE6F7EE)
-                                  : ChibiTheme.softPink,
-                              foregroundColor: added
-                                  ? const Color(0xFF15803D)
-                                  : ChibiTheme.deepPink,
+                            // Nút Bỏ qua -> Đẩy từ đó xuống cuối danh sách (bấm lại để khôi phục)
+                            TextButton(
+                              onPressed: () async {
+                                await widget
+                                    .onToggleSkipWord(word.englishWord);
+                                if (!mounted) return;
+                                setState(() {});
+                              },
+                              style: TextButton.styleFrom(
+                                foregroundColor: skipped
+                                    ? ChibiTheme.deepPink
+                                    : ChibiTheme.textMuted,
+                                backgroundColor: skipped
+                                    ? ChibiTheme.softPink
+                                    : const Color(0xFFF1F5F9),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: Text(
+                                skipped ? 'Khôi phục' : 'Bỏ qua',
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
                             ),
-                            icon: Icon(
-                              added
-                                  ? Icons.check_rounded
-                                  : Icons.bookmark_add_rounded,
-                              size: 20,
+                            const SizedBox(width: 6),
+                            IconButton.filledTonal(
+                              onPressed: added
+                                  ? null
+                                  : () {
+                                      final card = word.toFlashcardItem(
+                                        indexNumber:
+                                            widget.userFlashcards.length + 1,
+                                      );
+                                      widget.onAddWordToFlashcards(card);
+                                      setState(() {
+                                        _locallyAddedWords.add(word.englishWord
+                                            .trim()
+                                            .toLowerCase());
+                                      });
+                                    },
+                              style: IconButton.styleFrom(
+                                backgroundColor: added
+                                    ? const Color(0xFFE6F7EE)
+                                    : ChibiTheme.softPink,
+                                foregroundColor: added
+                                    ? const Color(0xFF15803D)
+                                    : ChibiTheme.deepPink,
+                              ),
+                              icon: Icon(
+                                added
+                                    ? Icons.check_rounded
+                                    : Icons.bookmark_add_rounded,
+                                size: 20,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: added
+                                  ? 'Đã có trong Flashcard của bạn'
+                                  : 'Thêm vào Flashcard của bạn',
                             ),
-                            tooltip: added
-                                ? 'Đã có trong Flashcard của bạn'
-                                : 'Thêm vào Flashcard của bạn',
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
