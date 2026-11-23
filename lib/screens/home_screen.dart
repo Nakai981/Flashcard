@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/flashcard_model.dart';
 import '../services/audio_speech_service.dart';
+import '../services/lan_sync_service.dart';
 import '../services/storage_service.dart';
 import '../theme/chibi_theme.dart';
 import 'add_flashcard_sheet.dart';
@@ -33,6 +34,47 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _initAutoLanSync();
+  }
+
+  @override
+  void dispose() {
+    LanSyncService.removeDataSyncedListener(_reloadAfterLanSync);
+    LanSyncService.removeSyncCompletedListener(_onAutoLanSyncCompleted);
+    super.dispose();
+  }
+
+  Future<void> _reloadAfterLanSync() async {
+    final loaded = await StorageService.loadFlashcards();
+    if (!mounted) return;
+    setState(() {
+      _flashcards = loaded;
+      _syncRefreshVersion++;
+    });
+  }
+
+  void _onAutoLanSyncCompleted(LanSyncResult result) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF15803D),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        content: Text(
+          '📲 ${result.message}',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _initAutoLanSync() async {
+    await LanSyncService.initAutoSyncOnAppStart(
+      onDataSynced: _reloadAfterLanSync,
+      onAutoSyncSuccess: _onAutoLanSyncCompleted,
+    );
   }
 
   Future<void> _loadData() async {

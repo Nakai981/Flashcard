@@ -22,7 +22,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Trạng thái Đồng bộ mạng LAN giữa 2 điện thoại
   bool _isLanServerRunning = LanSyncService.isServerRunning;
+  bool _autoSyncEnabled = LanSyncService.autoSyncEnabled;
   String? _myLanIp = LanSyncService.localIp;
+  String? _savedPeerIp = LanSyncService.savedPeerIp;
+  String? _savedPeerName = LanSyncService.savedPeerName;
   bool _isSyncing = false;
   String? _syncStatusMessage;
   bool _isSyncSuccess = true;
@@ -33,16 +36,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _initSettings();
+    LanSyncService.addSyncCompletedListener(_onBackgroundSyncCompleted);
   }
 
   @override
   void dispose() {
+    LanSyncService.removeSyncCompletedListener(_onBackgroundSyncCompleted);
     _peerIpController.dispose();
     super.dispose();
   }
 
+  void _onBackgroundSyncCompleted(LanSyncResult result) {
+    if (!mounted) return;
+    setState(() {
+      _savedPeerIp = LanSyncService.savedPeerIp;
+      _savedPeerName = LanSyncService.savedPeerName;
+      if (_savedPeerIp != null && _peerIpController.text.trim().isEmpty) {
+        _peerIpController.text = _savedPeerIp!;
+      }
+      _syncStatusMessage = result.message;
+      _isSyncSuccess = true;
+    });
+  }
+
   Future<void> _initSettings() async {
     await AudioSpeechService.loadVoiceSettings();
+    await LanSyncService.loadSavedSyncConfig();
     final ip = await LanSyncService.getLocalLanIp();
     if (!mounted) return;
     setState(() {
@@ -50,7 +69,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _speechRate = AudioSpeechService.currentSpeechRate;
       _myLanIp = ip;
       _isLanServerRunning = LanSyncService.isServerRunning;
+      _autoSyncEnabled = LanSyncService.autoSyncEnabled;
+      _savedPeerIp = LanSyncService.savedPeerIp;
+      _savedPeerName = LanSyncService.savedPeerName;
+      _discoveredPeers.addAll(LanSyncService.discoveredPeers);
+      if (_savedPeerIp != null && _savedPeerIp!.isNotEmpty) {
+        _peerIpController.text = _savedPeerIp!;
+      }
       _isLoading = false;
+    });
+  }
+
+  Future<void> _toggleAutoSync(bool value) async {
+    await LanSyncService.setAutoSyncEnabled(value);
+    if (!mounted) return;
+    setState(() {
+      _autoSyncEnabled = value;
+      _isLanServerRunning = LanSyncService.isServerRunning;
     });
   }
 
@@ -78,26 +113,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _peerIpController.text = peer.ip;
             }
           });
-        },
-        onIncomingSyncCompleted: (result) {
-          if (!mounted) return;
-          setState(() {
-            _syncStatusMessage = result.message;
-            _isSyncSuccess = true;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF15803D),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              content: Text(
-                result.message,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ),
-          );
         },
       );
 
@@ -144,6 +159,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _isSyncing = false;
+        _savedPeerIp = LanSyncService.savedPeerIp;
+        _savedPeerName = LanSyncService.savedPeerName;
         _syncStatusMessage = result.message;
         _isSyncSuccess = true;
       });
@@ -168,6 +185,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isSyncSuccess = false;
       });
     }
+  }
+
+  Future<void> _clearSavedDevice() async {
+    await LanSyncService.clearSavedPeer();
+    if (!mounted) return;
+    setState(() {
+      _savedPeerIp = null;
+      _savedPeerName = null;
+      _peerIpController.clear();
+      _syncStatusMessage = 'Đã xóa thiết bị đã lưu.';
+      _isSyncSuccess = true;
+    });
   }
 
   Future<void> _selectVoice(EnglishVoiceOption option) async {
@@ -207,7 +236,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 1. Khung Đồng Bộ Dữ Liệu Qua Mạng LAN Giữa 2 Điện Thoại
+          // 1. Khung Đồng Bộ Dữ Liệu Qua Mạng LAN Giữa 2 Điện Thoại (Có lưu thiết bị & tự động đồng bộ khi mở app)
           _buildLanSyncSection(),
           const SizedBox(height: 18),
 
@@ -260,21 +289,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 14),
 
-          // Nhóm Giọng Tiếng Mỹ (US) - Nữ & Nam
           _buildAccentSection(
             title: '🇺🇸 Giọng Tiếng Mỹ (American English)',
             voices: usVoices,
           ),
           const SizedBox(height: 14),
 
-          // Nhóm Giọng Tiếng Anh (UK) - Nữ & Nam
           _buildAccentSection(
             title: '🇬🇧 Giọng Tiếng Anh (British English)',
             voices: ukVoices,
           ),
           const SizedBox(height: 14),
 
-          // Tốc độ đọc
           Container(
             padding: const EdgeInsets.all(16),
             decoration: ChibiTheme.kawaiiCardDecoration(
@@ -400,7 +426,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     SizedBox(height: 2),
                     Text(
-                      'Đồng bộ 2 chiều Flashcard, Ghi chú & tiến độ Ôn tập giữa 2 điện thoại cùng Wi-Fi',
+                      'Tự động lưu thiết bị và tự động đồng bộ khi mở app nếu mạng LAN sẵn sàng',
                       style: TextStyle(
                         fontSize: 12,
                         color: ChibiTheme.textMuted,
@@ -412,9 +438,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
-          // Bước 1: Bật kết nối LAN trên máy để hiển thị IP và tự động dò tìm
+          // Công tắc: Tự động đồng bộ khi mở ứng dụng
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF3FF),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: ChibiTheme.softPink),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.autorenew_rounded,
+                    color: ChibiTheme.deepPink, size: 22),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tự động đồng bộ khi mở App',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w900,
+                          color: ChibiTheme.textDark,
+                        ),
+                      ),
+                      Text(
+                        'Tự bật LAN & đồng bộ với thiết bị đã lưu',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: ChibiTheme.textMuted,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _autoSyncEnabled,
+                  activeTrackColor: ChibiTheme.deepPink,
+                  onChanged: _toggleAutoSync,
+                ),
+              ],
+            ),
+          ),
+
+          // Hiển thị thông tin thiết bị đã lưu (nếu đã từng đồng bộ)
+          if (_savedPeerIp != null && _savedPeerIp!.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE6F7EE),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF86EFAC)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.link_rounded,
+                      color: Color(0xFF15803D), size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Đã lưu: ${_savedPeerName ?? "Điện thoại Chibi"} ($_savedPeerIp)',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFF15803D),
+                          ),
+                        ),
+                        const Text(
+                          'Mở app ở cả 2 máy sẽ tự động đồng bộ ngay',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: Color(0xFF166534),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _clearSavedDevice,
+                    icon: const Icon(Icons.close_rounded,
+                        size: 18, color: Color(0xFF15803D)),
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Quên thiết bị này',
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 10),
+
+          // Trạng thái IP của máy hiện tại
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -439,8 +562,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 2),
                       Text(
                         _isLanServerRunning
-                            ? 'Đang bật chế độ chờ đồng bộ (Cổng ${LanSyncService.defaultHttpPort})'
-                            : 'Bấm "Bật kết nối" ở cả 2 máy để tự tìm nhau',
+                            ? 'Mạng LAN đã sẵn sàng đồng bộ (Cổng ${LanSyncService.defaultHttpPort})'
+                            : 'Đang tắt kết nối LAN',
                         style: const TextStyle(
                           fontSize: 11.5,
                           color: ChibiTheme.textMuted,
@@ -481,11 +604,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          // Danh sách thiết bị tự động tìm thấy trên cùng mạng Wi-Fi
           if (_discoveredPeers.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Text(
-              'Thiết bị tìm thấy trong mạng LAN (Chạm để đồng bộ):',
+              'Thiết bị tìm thấy trong mạng LAN (Chạm để đồng bộ & lưu):',
               style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w800,
@@ -561,7 +683,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
 
           const SizedBox(height: 12),
-          // Ô nhập IP thủ công nếu Wi-Fi chặn broadcast
           Row(
             children: [
               Expanded(
