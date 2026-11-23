@@ -167,32 +167,36 @@ class DailyReminderWidgetService {
     final todayWords = getTodayNewWords(flashcards);
     final prefs = await SharedPreferences.getInstance();
 
-    if (todayWords.isEmpty) {
-      await prefs.setString(_widgetWordKey, 'Chưa có từ mới');
-      await prefs.setString(_widgetPhoneticKey, '');
-      await prefs.setString(
-          _widgetMeaningKey, 'Hãy thêm từ mới vào Chibi Flashcard nhé!');
-      await prefs.setString(
-          _widgetSummaryKey, '💎 TỪ MỚI TRONG NGÀY • CHIBI FLASHCARD');
-    } else {
+    String widgetWord = 'Chưa có từ mới';
+    String widgetPhonetic = '';
+    String widgetMeaning = 'Hãy thêm từ mới vào Chibi Flashcard nhé!';
+    String widgetSummary = '💎 TỪ MỚI TRONG NGÀY • CHIBI FLASHCARD';
+
+    if (todayWords.isNotEmpty) {
       final featured = todayWords.first;
       final extraCount = todayWords.length - 1;
-      final summaryHeader = extraCount > 0
+      widgetWord = featured.englishWord;
+      widgetPhonetic = featured.phonetic;
+      widgetMeaning = featured.primaryVietnamese;
+      widgetSummary = extraCount > 0
           ? '💎 TỪ MỚI HÔM NAY (${todayWords.length} TỪ) • CHIBI FLASHCARD'
           : '💎 TỪ MỚI TRONG NGÀY • CHIBI FLASHCARD';
-
-      await prefs.setString(_widgetWordKey, featured.englishWord);
-      await prefs.setString(_widgetPhoneticKey, featured.phonetic);
-      await prefs.setString(_widgetMeaningKey, featured.primaryVietnamese);
-      await prefs.setString(_widgetSummaryKey, summaryHeader);
     }
 
-    // 1. Yêu cầu Android cập nhật Native AppWidget ngoài màn hình chính / màn hình khóa
-    if (Platform.isAndroid) {
-      try {
-        await _widgetChannel.invokeMethod('updateWidget');
-      } catch (_) {}
-    }
+    await prefs.setString(_widgetWordKey, widgetWord);
+    await prefs.setString(_widgetPhoneticKey, widgetPhonetic);
+    await prefs.setString(_widgetMeaningKey, widgetMeaning);
+    await prefs.setString(_widgetSummaryKey, widgetSummary);
+
+    // 1. Yêu cầu cả iOS (WidgetKit Lock Screen / Home Screen) và Android (AppWidget) cập nhật ngay
+    try {
+      await _widgetChannel.invokeMethod('updateWidget', {
+        'word': widgetWord,
+        'phonetic': widgetPhonetic,
+        'meaning': widgetMeaning,
+        'summary': widgetSummary,
+      });
+    } catch (_) {}
 
     // 2. Hiển thị / Cập nhật Tiện ích Từ Mới Trong Ngày trên Màn hình khóa (Lock Screen)
     if (!_lockScreenWidgetEnabled || todayWords.isEmpty) {
@@ -236,10 +240,10 @@ class DailyReminderWidgetService {
 
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
-      presentBanner: false,
+      presentBanner: true,
       presentList: true,
       presentSound: false,
-      interruptionLevel: InterruptionLevel.passive,
+      interruptionLevel: InterruptionLevel.active,
     );
 
     try {
