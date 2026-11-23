@@ -38,7 +38,8 @@ class _FlashcardStudyScreenState extends State<FlashcardStudyScreen> {
     super.initState();
     _currentIndex = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
-    _initSpeech();
+    // Không gọi _initSpeech() tự động trong initState để tránh crash iOS ngay khi mở thẻ Flashcard
+    // (Chỉ khởi tạo khi người dùng thực sự bấm vào nút "Bấm để thu âm giọng đọc").
   }
 
   Future<void> _initSpeech() async {
